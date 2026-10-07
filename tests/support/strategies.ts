@@ -1,7 +1,7 @@
 import {
   createScenario,
   replay,
-  trafficSpikeScenario,
+  trafficIncidentScenario,
   type Scenario,
   type Simulation,
   type SimulationAction,
@@ -41,7 +41,7 @@ export function toActions(steps: readonly StrategyStep[], scenario: Scenario): S
 }
 
 /** Plays a strategy to the end of the scenario. */
-export function play(strategy: Strategy, scenario: Scenario = createScenario(trafficSpikeScenario)): Simulation {
+export function play(strategy: Strategy, scenario: Scenario = createScenario(trafficIncidentScenario)): Simulation {
   const simulation = replay(scenario, toActions(strategy.steps, scenario));
   if (!simulation.isComplete()) simulation.runToCompletion();
   return simulation;
@@ -52,7 +52,7 @@ export interface StrategySummary {
   name: string;
   outcome: SimulationResult["outcome"];
   score: number;
-  peakP95: number;
+  peakP99: number;
   peakErrorRate: number;
   availability: number;
   finalMonthlyCost: number;
@@ -64,18 +64,20 @@ export interface StrategySummary {
   failedRequests: number;
   throttledRequests: number;
   minutesInViolation: number;
+  sloViolationMinutes: number;
+  businessImpact: number;
+  timeToStabilize: number | null;
 }
 
 export function summarize(strategy: Strategy, simulation: Simulation): StrategySummary {
   const result = simulation.getResult();
   const history = simulation.getHistory();
-  const peakP95 = Math.max(...history.samples.map((sample) => sample.metrics.p95Latency ?? 0));
   return {
     id: strategy.id,
     name: strategy.name,
     outcome: result.outcome,
     score: result.score,
-    peakP95,
+    peakP99: result.metrics.peakP99Latency,
     peakErrorRate: result.metrics.peakErrorRate,
     availability: result.metrics.availability,
     finalMonthlyCost: result.metrics.totalCost,
@@ -87,89 +89,125 @@ export function summarize(strategy: Strategy, simulation: Simulation): StrategyS
     failedRequests: result.impact.failedRequests,
     throttledRequests: result.impact.throttledRequests,
     minutesInViolation: result.impact.minutesInViolation,
+    sloViolationMinutes: result.impact.sloViolationMinutes,
+    businessImpact: result.impact.businessImpact ?? 0,
+    timeToStabilize: simulation.getPostmortem().summary.timeToStabilize,
   };
 }
 
-/** The five strategies from the Phase 1.5 brief, played against "The 10× Traffic Incident". */
+/**
+ * The five strategies from the Phase 2 brief, written as playbooks an engineer
+ * might follow against "The 10× Traffic Incident". Each reacts to what it can
+ * see at the time; none is tuned to the hidden numbers.
+ */
 export const STRATEGIES: Strategy[] = [
   {
     id: "A",
     name: "Scale first",
-    summary: "Throw capacity at it: scale the application, upgrade the database, keep scaling, trim afterwards.",
+    summary: "Treat it as a capacity problem: scale the application and PostgreSQL, and only look deeper when scaling stops working.",
     steps: [
-      { at: 3, decision: "scale-application", rationale: "Traffic is climbing and application CPU is over 100%." },
-      { at: 3, decision: "scale-application", rationale: "The ramp has not stopped; get ahead of it." },
-      { at: 4, decision: "increase-database-capacity", rationale: "More application capacity will push more load to the database." },
-      { at: 5, decision: "scale-application", rationale: "Errors are still high; add more capacity." },
-      { at: 6, decision: "scale-application", rationale: "Latency is still above the SLO." },
-      { at: 36, decision: "scale-down-application", rationale: "Traffic has settled; cut cost to meet the new budget." },
-      { at: 36, decision: "scale-down-application", rationale: "Still over budget." },
+      { at: 3, decision: "scale-application", rationale: "Traffic is up 50% and latency is climbing; add capacity." },
+      { at: 4, decision: "scale-application", rationale: "Errors are rising; get ahead of the ramp." },
+      { at: 5, decision: "upgrade-database", rationale: "More application capacity will push more load to the database; give it room." },
+      { at: 6, decision: "scale-application", rationale: "Traffic is at 50,000 rps." },
+      { at: 8, decision: "investigate-database", rationale: "Scaling has not helped; errors are still above 50%." },
+      { at: 10, decision: "enable-cache", rationale: "PostgreSQL is far past capacity even on the larger instance; take reads off it." },
+      { at: 10, decision: "scale-application", rationale: "Second wave: keep capacity ahead of traffic." },
+      { at: 11, decision: "scale-application", rationale: "Traffic heading for 100,000 rps." },
+      { at: 30, decision: "downgrade-database", rationale: "Traffic has settled and Redis carries the reads; the budget is now $2,800." },
+      { at: 30, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 31, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 32, decision: "scale-down-application", rationale: "Trim to the new normal." },
     ],
   },
   {
     id: "B",
     name: "Investigate first",
-    summary: "Learn the read/write mix and the database's condition before acting, then add targeted capacity.",
+    summary: "Spend four minutes learning what the traffic is and where PostgreSQL stands, then act on the evidence.",
     steps: [
-      { at: 3, decision: "investigate-traffic", rationale: "Do not guess: find out what the traffic actually is." },
-      { at: 5, decision: "investigate-database", rationale: "Latency is rising; check whether the database is the bottleneck." },
-      { at: 7, decision: "enable-cache", rationale: "80% of requests are reads and the database is saturated." },
-      { at: 7, decision: "add-database-replica", rationale: "Spread the remaining reads while the cache warms up." },
-      { at: 7, decision: "scale-application", rationale: "Application CPU is far above capacity." },
-      { at: 7, decision: "scale-application", rationale: "Traffic has reached 3,000 rps." },
-      { at: 7, decision: "scale-application", rationale: "Match capacity to 3,000 rps with some headroom." },
-      { at: 36, decision: "scale-down-application", rationale: "Traffic has settled; cut cost to meet the new budget." },
-      { at: 36, decision: "scale-down-application", rationale: "Still over budget." },
+      { at: 3, decision: "investigate-traffic", rationale: "Do not guess: find out what the new traffic is." },
+      { at: 5, decision: "investigate-database", rationale: "Errors started with the surge; check whether PostgreSQL is the bottleneck." },
+      { at: 7, decision: "enable-cache", rationale: "94% of requests are reads and 90% of reads are cacheable; PostgreSQL is far past its limit." },
+      { at: 7, decision: "upgrade-database", rationale: "Even a warm cache leaves PostgreSQL near its limit at 100,000 rps; writes cost 25% more than reads." },
+      { at: 7, decision: "scale-application", rationale: "Application CPU is at capacity at 50,000 rps." },
+      { at: 7, decision: "scale-application", rationale: "Capacity for the second wave." },
+      { at: 9, decision: "scale-application", rationale: "Second wave: keep capacity ahead of traffic." },
+      { at: 10, decision: "scale-application", rationale: "Traffic heading for 100,000 rps." },
+      { at: 30, decision: "downgrade-database", rationale: "Redis carries the reads at the new normal; the budget is now $2,800." },
+      { at: 31, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 32, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 33, decision: "scale-down-application", rationale: "Trim to the new normal." },
     ],
   },
   {
     id: "C",
     name: "Cache first",
-    summary: "Check the mix, put a cache in front of the database, watch the hit rate, then scale as needed.",
+    summary: "Bet on the read-heavy hypothesis: put Redis in front of PostgreSQL immediately, scale with the traffic, add headroom when errors persist.",
     steps: [
-      { at: 3, decision: "investigate-traffic", rationale: "Confirm the traffic is read-heavy before adding a cache." },
-      { at: 5, decision: "enable-cache", rationale: "Most traffic is reads; caching attacks the cause, not the symptom." },
-      { at: 8, decision: "scale-application", rationale: "Cache hit rate is climbing but the application is still saturated." },
-      { at: 8, decision: "scale-application", rationale: "Traffic is at 3,000 rps." },
-      { at: 8, decision: "scale-application", rationale: "Leave headroom." },
-      { at: 10, decision: "scale-application", rationale: "Hit rate is 85% but p95 is still above the SLO; the application is the bottleneck." },
-      { at: 36, decision: "scale-down-application", rationale: "Traffic has settled; cut cost to meet the new budget." },
-      { at: 36, decision: "scale-down-application", rationale: "Trim further while utilization allows." },
-      { at: 36, decision: "scale-down-application", rationale: "Trim further while utilization allows." },
-      { at: 36, decision: "scale-down-application", rationale: "Trim further while utilization allows." },
+      { at: 3, decision: "enable-cache", rationale: "A product launch is mostly people browsing; caching attacks the cause." },
+      { at: 3, decision: "scale-application", rationale: "Capacity for the climb." },
+      { at: 5, decision: "scale-application", rationale: "Traffic is still climbing." },
+      { at: 6, decision: "scale-application", rationale: "Traffic is at 50,000 rps." },
+      { at: 9, decision: "scale-application", rationale: "Second wave: keep capacity ahead of traffic." },
+      { at: 10, decision: "scale-application", rationale: "Traffic heading for 100,000 rps." },
+      { at: 13, decision: "add-database-replica", rationale: "Errors persist at 100,000 rps with a 90% hit rate; the database must still be the limit." },
+      { at: 30, decision: "remove-database-replica", rationale: "Traffic has settled; the budget is now $2,800." },
+      { at: 30, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 31, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 32, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 33, decision: "scale-down-application", rationale: "Trim to the new normal." },
     ],
   },
   {
     id: "D",
     name: "Protect the system",
-    summary: "Shed load first, investigate, scale behind the limit, then relax the limit gradually.",
+    summary: "Cap traffic at the gateway first, fix the backend behind the limit, then let users back in step by step.",
     steps: [
-      { at: 3, decision: "enable-rate-limiting", rationale: "Protect the backend before anything else falls over." },
-      { at: 3, decision: "investigate-database", rationale: "Find out how much headroom the database has." },
-      { at: 5, decision: "scale-application", rationale: "Scale the application behind the limit." },
-      { at: 5, decision: "scale-application", rationale: "Enough application capacity for the limit." },
-      { at: 5, decision: "increase-database-capacity", rationale: "The database is close to its limit." },
-      { at: 12, decision: "scale-application", rationale: "Add capacity before letting more traffic in." },
-      { at: 12, decision: "relax-rate-limiting", rationale: "The backend is stable; let more users in." },
-      { at: 18, decision: "relax-rate-limiting", rationale: "Still stable; relax again." },
-      { at: 36, decision: "scale-down-application", rationale: "Traffic has settled; cut cost." },
+      { at: 3, decision: "enable-rate-limiting", rationale: "Protect the backend before it collapses; 429s are better than timeouts." },
+      { at: 3, decision: "enable-cache", rationale: "Take reads off PostgreSQL behind the limit." },
+      { at: 3, decision: "investigate-database", rationale: "Find out how much headroom PostgreSQL has before letting more traffic in." },
+      { at: 5, decision: "add-database-replica", rationale: "PostgreSQL is past capacity; add read capacity that works immediately." },
+      { at: 5, decision: "scale-application", rationale: "Capacity for the current limit." },
+      { at: 8, decision: "relax-rate-limit", rationale: "Redis is warm and errors are low; let more users in." },
+      { at: 8, decision: "scale-application", rationale: "Capacity before the next step up." },
+      { at: 9, decision: "relax-rate-limit", rationale: "Still healthy; relax again." },
+      { at: 9, decision: "scale-application", rationale: "Capacity before the next step up." },
+      { at: 10, decision: "relax-rate-limit", rationale: "Still healthy; relax again." },
+      { at: 10, decision: "scale-application", rationale: "Capacity before the next step up." },
+      { at: 11, decision: "relax-rate-limit", rationale: "Still healthy; relax again." },
+      { at: 12, decision: "relax-rate-limit", rationale: "Still healthy; relax again." },
+      { at: 13, decision: "relax-rate-limit", rationale: "Still healthy; relax again." },
+      { at: 14, decision: "relax-rate-limit", rationale: "Keep the limit above traffic as a safety net." },
+      { at: 30, decision: "remove-database-replica", rationale: "Traffic has settled; the budget is now $2,800." },
+      { at: 30, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 31, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 32, decision: "scale-down-application", rationale: "Trim to the new normal." },
     ],
   },
   {
     id: "E",
     name: "Balanced",
-    summary: "Investigate, scale moderately, add a cache and database capacity, then a targeted rate limit.",
+    summary: "Start the cache and scale at once, check the traffic while Redis warms, buy database headroom, and use the rate limit only as a circuit breaker.",
     steps: [
-      { at: 3, decision: "investigate-traffic", rationale: "Understand the traffic before committing money." },
-      { at: 5, decision: "scale-application", rationale: "Moderate scale-out to stop the bleeding." },
-      { at: 5, decision: "scale-application", rationale: "Moderate scale-out to stop the bleeding." },
-      { at: 5, decision: "enable-cache", rationale: "Reads dominate; offload the database." },
-      { at: 5, decision: "increase-database-capacity", rationale: "Headroom for writes and cache misses." },
-      { at: 5, decision: "enable-rate-limiting", rationale: "Cap traffic at what 12 instances can serve." },
-      { at: 15, decision: "scale-application", rationale: "Cache is warm; add capacity before letting more users in." },
-      { at: 15, decision: "relax-rate-limiting", rationale: "The backend can now take more." },
-      { at: 36, decision: "scale-down-application", rationale: "Traffic has settled; cut cost." },
-      { at: 36, decision: "scale-down-application", rationale: "Trim further while utilization allows." },
+      { at: 3, decision: "enable-cache", rationale: "Reads are the likely load; start warming Redis now." },
+      { at: 3, decision: "scale-application", rationale: "Capacity for the climb." },
+      { at: 3, decision: "investigate-traffic", rationale: "Confirm the read-heavy hypothesis while Redis warms." },
+      { at: 5, decision: "scale-application", rationale: "Traffic is still climbing." },
+      { at: 5, decision: "upgrade-database", rationale: "Confirmed read-heavy; buy PostgreSQL headroom for cache misses and writes." },
+      { at: 6, decision: "scale-application", rationale: "Traffic is at 50,000 rps." },
+      { at: 9, decision: "scale-application", rationale: "Second wave: keep capacity ahead of traffic." },
+      { at: 10, decision: "scale-application", rationale: "Traffic heading for 100,000 rps." },
+      { at: 18, decision: "enable-rate-limiting", rationale: "Redis lost half its keys; shed load so PostgreSQL survives the re-warm." },
+      { at: 18, decision: "relax-rate-limit", rationale: "Limit at 50,000 rps." },
+      { at: 18, decision: "relax-rate-limit", rationale: "Limit at 60,000 rps." },
+      { at: 18, decision: "relax-rate-limit", rationale: "Limit at 70,000 rps." },
+      { at: 18, decision: "relax-rate-limit", rationale: "Limit at 80,000 rps." },
+      { at: 21, decision: "relax-rate-limit", rationale: "Hit rate has recovered; lift the limit." },
+      { at: 21, decision: "relax-rate-limit", rationale: "Hit rate has recovered; lift the limit." },
+      { at: 30, decision: "downgrade-database", rationale: "Traffic has settled; the budget is now $2,800." },
+      { at: 31, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 32, decision: "scale-down-application", rationale: "Trim to the new normal." },
+      { at: 33, decision: "scale-down-application", rationale: "Trim to the new normal." },
     ],
   },
 ];

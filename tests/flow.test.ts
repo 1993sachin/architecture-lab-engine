@@ -213,3 +213,42 @@ describe("bounded queues", () => {
     expect(simulation.getState().metrics).toMatchObject({ queueDepth: 4500, errorRate: 0.5 });
   });
 });
+
+describe("request cost and baseline errors", () => {
+  /** client → app → db with 100 rps, 80% reads, db capacity 100. */
+  function weighted(configuration: Record<string, number>): SystemState {
+    return buildScenario((definition) => {
+      definition.initialState.components[2] = { id: "db", type: "database", capacity: 100, configuration };
+    }).initialState;
+  }
+
+  it("weighs database demand by the cost of each request class", () => {
+    expect(component(weighted({}), "db").utilization).toBe(1);
+    // 80 reads × 1 + 20 writes × 1.5 = 110 units of work.
+    expect(component(weighted({ writeCost: 1.5 }), "db").utilization).toBe(1.1);
+    expect(component(weighted({ readCost: 0.5 }), "db").utilization).toBe(0.6);
+  });
+
+  it("fails a fixed fraction of requests regardless of load", () => {
+    const state = buildScenario((definition) => {
+      definition.initialState.components[1] = { id: "app", type: "application", capacity: 200, configuration: { baseErrorRate: 0.001 } };
+    }).initialState;
+    expect(state.metrics.errorRate).toBe(0.001);
+    expect(state.metrics.serverErrorRate).toBe(0.001);
+  });
+});
+
+describe("throttled and server errors", () => {
+  it("splits the error rate into rate-limited requests and server errors", () => {
+    const state = buildScenario((definition) => {
+      definition.workload.requestsPerSecond = 400;
+      definition.initialState.components.push({ id: "gw", type: "apiGateway", capacity: null, configuration: { rateLimit: 300 } });
+      definition.initialState.dependencies[0] = { from: "client", to: "gw" };
+      definition.initialState.dependencies.push({ from: "gw", to: "app" });
+    }).initialState;
+    // 100 of 400 rps throttled; the app (capacity 200) is overloaded by the 300 it accepts.
+    expect(state.metrics.throttleRate).toBe(0.25);
+    expect(state.metrics.serverErrorRate).toBeGreaterThan(0.25);
+    expect((state.metrics.throttleRate ?? 0) + (state.metrics.serverErrorRate ?? 0)).toBeCloseTo(state.metrics.errorRate ?? 0, 4);
+  });
+});

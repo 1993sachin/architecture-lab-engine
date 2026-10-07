@@ -1,4 +1,5 @@
 import type {
+  Constraint,
   Consequence,
   DecisionOption,
   DecisionOutcome,
@@ -10,6 +11,7 @@ import type {
   HistoryEntry,
   MetricSample,
   ObservedValue,
+  Postmortem,
   Scenario,
   SimulationAction,
   SimulationHistory,
@@ -20,7 +22,7 @@ import type { ConditionContext } from "../conditions/evaluate.ts";
 import { evaluateCondition } from "../conditions/evaluate.ts";
 import { checkConstraints } from "../constraints/check.ts";
 import { ViolationTracker } from "../constraints/tracker.ts";
-import { totalCost } from "../costs/cost.ts";
+import { subtractCosts, totalCost } from "../costs/cost.ts";
 import { applyDecision } from "../decisions/apply.ts";
 import { previewDecision, validateDecision, type DecisionContext } from "../decisions/validate.ts";
 import { applyEffectsInPlace } from "../effects/apply.ts";
@@ -30,6 +32,7 @@ import { diffStates } from "../history/consequences.ts";
 import { calculateMetricsInPlace } from "../metrics/calculate.ts";
 import { observe } from "../observations/observe.ts";
 import { ObjectiveTracker } from "../scoring/objectives.ts";
+import { createPostmortem } from "../scoring/postmortem.ts";
 import { buildResult } from "../scoring/result.ts";
 import { cloneState } from "../state/clone.ts";
 import { round } from "../state/numeric.ts";
@@ -73,6 +76,8 @@ export interface Simulation {
   getHistory(): SimulationHistory;
   /** The structured result. Available at any time; `complete` says whether the run has ended. */
   getResult(): SimulationResult;
+  /** Structured postmortem data: summary, impact, decisions, constraints, architecture, learning signals. */
+  getPostmortem(): Postmortem;
 }
 
 export function createSimulation(scenario: Scenario): Simulation {
@@ -115,6 +120,7 @@ class DeterministicSimulation implements Simulation {
   #endReason: EndReason = "inProgress";
   #visible: Set<string>;
   #currentViolations: string[] = [];
+  #knownConstraints = new Map<string, string>();
 
   constructor(scenario: Scenario) {
     this.scenario = scenario;
@@ -218,6 +224,8 @@ class DeterministicSimulation implements Simulation {
       revealed,
       stateBefore: cloneState(before),
       stateAfter: cloneState(this.#state),
+      costImpact: subtractCosts(totalCost(this.#state), totalCost(before)),
+      complexityImpact: round(this.#state.complexityScore - before.complexityScore, 2),
       consequences,
       sideEffects: application.sideEffects,
     };
@@ -275,18 +283,24 @@ class DeterministicSimulation implements Simulation {
   }
 
   getHistory(): SimulationHistory {
-    return structuredClone({
-      entries: this.#entries,
-      decisions: this.#decisions,
-      events: this.#events,
-      samples: this.#samples,
-      actions: this.#actions,
-    });
+    return structuredClone(this.#history());
   }
 
   getResult(): SimulationResult {
-    return structuredClone(
-      buildResult({
+    return structuredClone(this.#result());
+  }
+
+  getPostmortem(): Postmortem {
+    // Built from internal data and copied once: decision records carry full states.
+    return structuredClone(createPostmortem(this.scenario, this.#result(), this.#history()));
+  }
+
+  #history(): SimulationHistory {
+    return { entries: this.#entries, decisions: this.#decisions, events: this.#events, samples: this.#samples, actions: this.#actions };
+  }
+
+  #result(): SimulationResult {
+    return buildResult({
         scenarioId: this.scenario.id,
         objectives: this.scenario.objectives,
         objectiveResults: this.#objectives.results(this.#conditionContext()),
@@ -297,8 +311,8 @@ class DeterministicSimulation implements Simulation {
         decisions: this.#decisions,
         consequences: this.#consequences,
         violations: this.#violations.violations(),
-      }),
-    );
+        businessImpact: this.scenario.businessImpact,
+    });
   }
 
   /** One tick of the pipeline. */
@@ -345,6 +359,7 @@ class DeterministicSimulation implements Simulation {
 
   /** Checks constraints, objectives and completion against the current state. */
   #observe(minutes: number): void {
+    this.#recordConstraintChanges();
     const context = this.#conditionContext();
     const checks = checkConstraints(context);
     this.#currentViolations = checks.filter((check) => !check.satisfied).map((check) => check.constraintId);
@@ -355,6 +370,23 @@ class DeterministicSimulation implements Simulation {
     if (completion.failWhen && evaluateCondition(completion.failWhen, context)) this.#endReason = "failCondition";
     else if (completion.endWhen && evaluateCondition(completion.endWhen, context)) this.#endReason = "endCondition";
     else if (this.#state.time >= completion.maxDuration) this.#endReason = "maxDuration";
+  }
+
+  #recordConstraintChanges(): void {
+    const time = this.#state.time;
+    const current = new Map(this.#state.constraints.map((constraint) => [constraint.id, constraint]));
+    for (const [id, constraint] of current) {
+      const serialized = JSON.stringify(constraint);
+      const known = this.#knownConstraints.get(id);
+      if (known === serialized) continue;
+      this.#entries.push({ type: "constraint", time, change: known === undefined ? "added" : "updated", constraint: structuredClone(constraint) });
+      this.#knownConstraints.set(id, serialized);
+    }
+    for (const [id, serialized] of [...this.#knownConstraints]) {
+      if (current.has(id)) continue;
+      this.#entries.push({ type: "constraint", time, change: "removed", constraint: JSON.parse(serialized) as Constraint });
+      this.#knownConstraints.delete(id);
+    }
   }
 
   /** Records the state at the end of an interval of `minutes`. */
@@ -368,7 +400,8 @@ class DeterministicSimulation implements Simulation {
       complexityScore: this.#state.complexityScore,
       monthlyCost: totalCost(this.#state).monthly,
       violations: [...this.#currentViolations],
-      failedRequests: round(this.#state.workload.requestsPerSecond * errorRate * seconds, 2),
+      requests: round(this.#state.workload.requestsPerSecond * seconds, 2),
+      failedRequests: round(Math.max(0, this.#state.workload.requestsPerSecond * errorRate - throttled) * seconds, 2),
       throttledRequests: round(throttled * seconds, 2),
     });
   }

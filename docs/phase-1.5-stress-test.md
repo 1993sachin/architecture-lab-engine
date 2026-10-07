@@ -1,5 +1,7 @@
 # Phase 1.5: engine stress test
 
+> Historical record. It was run against an earlier, smaller version of "The 10× Traffic Incident" (300 → 3,000 rps), replaced in Phase 2 by [`10x-traffic-incident.md`](10x-traffic-incident.md). Commands and file names below refer to that version.
+
 **Question:** can the engine produce meaningfully different outcomes from different, reasonable engineering strategies, with genuine trade-offs rather than "A is right, B is wrong"?
 
 **Answer:** yes, after the fixes in this PR. Before them, it could not.

@@ -29,13 +29,13 @@ npm run example   # play the built-in scenario in the terminal
 Requires Node.js 22.18+ or 24+ (the example runs TypeScript directly with Node's type stripping).
 
 ```ts
-import { createScenario, createSimulation, trafficSpikeScenario } from "@architecture-lab/engine";
+import { createScenario, createSimulation, trafficIncidentScenario } from "@architecture-lab/engine";
 
-const scenario = createScenario(trafficSpikeScenario);
+const scenario = createScenario(trafficIncidentScenario);
 const simulation = createSimulation(scenario);
 
-simulation.advance(6);                       // T+6 min: traffic has climbed tenfold
-simulation.getState().metrics.errorRate;     // 1: the application has collapsed
+simulation.advance(5);                       // T+5 min: traffic has climbed to 39,000 rps
+simulation.getState().metrics.errorRate;     // 0.78: PostgreSQL has collapsed
 
 const outcome = simulation.chooseDecision("enable-cache", {
   rationale: "Read traffic is dominant and database latency is increasing.",
@@ -43,7 +43,8 @@ const outcome = simulation.chooseDecision("enable-cache", {
 if (outcome.status !== "applied") console.log(outcome.reason);
 
 simulation.runToCompletion();
-const result = simulation.getResult();       // outcome, metrics, decisions, strengths, weaknesses…
+const result = simulation.getResult();       // outcome, metrics, impact, decisions, strengths, weaknesses…
+const postmortem = simulation.getPostmortem(); // summary, impact, decisions, constraints, architecture, learning signals
 ```
 
 ## Core concepts
@@ -62,11 +63,14 @@ const result = simulation.getResult();       // outcome, metrics, decisions, str
 | **Consequence** | A deterministic description of something that changed, classified as positive/negative/neutral with a severity. | `src/engine/history/` |
 | **Decision record** | Every applied decision: id, logical timestamp, the engineer's rationale (kept verbatim), what they could observe at the time, what it revealed, state before and after, consequences, side effects. | `src/types/decisions.ts` |
 | **Objective** | What counts as doing well: a condition that must hold at the end (`final`), at every tick (`throughout`), or for a share of the time (`fractionOfTime` with a `threshold`). | `src/engine/scoring/objectives.ts` |
-| **Result** | Outcome (`success`/`partial`/`failure`), score, peak and time-weighted metrics, cost, complexity, objectives, constraint violations, incident impact (failed and throttled requests, minutes in violation, when it stabilized), strengths and weaknesses. | `src/engine/scoring/` |
+| **Result** | Outcome (`success`/`partial`/`failure`), score, peak and time-weighted metrics, cost, complexity, objectives, constraint violations, incident impact (successful, failed and throttled requests, business impact, SLO-violation minutes, when it stabilized), strengths and weaknesses. | `src/engine/scoring/` |
+| **Postmortem** | Structured incident report built from a run: summary (outcome, time to stabilize), impact, every decision with its rationale, knowledge and cost, the constraint timeline, initial and final architecture, timeline, and measurable learning signals. | `src/engine/scoring/postmortem.ts` |
 
 ### Metrics
 
-`requestsPerSecond`, `latency`, `p95Latency`, `p99Latency`, `errorRate`, `availability`, `cpuUtilization`, `memoryUtilization`, `databaseUtilization`, `cacheHitRate`, `queueDepth`, `monthlyCost`.
+`requestsPerSecond`, `latency`, `p95Latency`, `p99Latency`, `errorRate`, `availability`, `throttleRate`, `serverErrorRate`, `cpuUtilization`, `memoryUtilization`, `databaseUtilization`, `cacheHitRate`, `queueDepth`, `monthlyCost`.
+
+`errorRate` counts rate-limited requests as failures, because users see them; `throttleRate` and `serverErrorRate` split it.
 
 Metrics that do not apply are absent (no cache, no `cacheHitRate`), and a scenario can track a subset with `metrics: [...]`. Utilization metrics are demand divided by capacity, so values above 1 mean overload.
 
@@ -123,6 +127,8 @@ Metrics come from one small, readable model in `src/engine/metrics/flow.ts`:
 2. **Backward pass** (callees before callers): a request's latency and error rate at a component are its own plus those of the synchronous dependencies it calls, weighted by how often it calls them.
 
 So when the database's capacity is exceeded or it becomes unhealthy, the application's latency and errors rise, and the clients see it. Latency grows with utilization through a queueing factor, and tail latency (p95/p99) with the busiest component on the request path. Queues break the chain: callers do not wait on, or fail with, the workers behind them.
+
+Some requests cost more than others: a component's `readCost` and `writeCost` configuration weigh its demand per request class, and `baseErrorRate` sets a load-independent error floor.
 
 It is intentionally not a perfect distributed-systems simulator. Each formula is a few lines, and new component types only need a catalog entry (`src/engine/components/catalog.ts`).
 
@@ -187,7 +193,9 @@ const scenario = createScenario(definition); // throws ScenarioValidationError l
 
 `defineScenario` only gives type checking. `createScenario` validates (unknown metrics, dangling or cyclic dependencies, duplicate ids, bad durations, …), builds the initial state, calculates its metrics and freezes the result.
 
-See `src/scenarios/traffic-spike.ts` for a complete scenario with ongoing effects (a cache warming up), side effects, conditional events and a mid-scenario budget cut.
+See `src/scenarios/10x-traffic-incident.ts` for a complete scenario with hidden information, investigations that take time, ongoing effects (a cache warming up, a database failover), conditional events, reversible decisions and a mid-scenario budget cut.
+
+A scenario can also declare a `businessImpact` model (`{ valuePerFailedRequest, valuePerThrottledRequest }`) to price failed and throttled requests in the result.
 
 ## Determinism
 
@@ -224,7 +232,7 @@ src/
     scoring/        objectives and the final result
   scenarios/        built-in scenarios
   index.ts          public API
-tests/              Vitest unit, scenario and stress tests (tests/support: strategies and reports)
+tests/              Vitest unit and scenario tests (tests/support: playbooks, strategy search, reports)
 docs/               analysis and reports
 examples/           runnable examples
 ```
@@ -237,10 +245,14 @@ examples/           runnable examples
 | `npm run test:watch` | Run the tests in watch mode |
 | `npm run typecheck` | Type-check source, tests and examples |
 | `npm run build` | Compile `src/` to `dist/` with type declarations |
-| `npm run example` | Play the built-in traffic-spike scenario |
-| `npm run report:strategies` | Compare five strategies on the traffic-spike scenario |
-| `npm run report:landscape` | Brute-force the scenario's decision space and print the Pareto front |
+| `npm run example` | Play a playbook against the 10× Traffic Incident (`npm run example -- B` for another) |
+| `npm run report:strategies` | Compare the five playbooks |
+| `npm run report:landscape` | Search 14,336 plans (about three minutes) and print outcomes and the Pareto frontier |
+
+## The 10× Traffic Incident
+
+The built-in scenario: a product launch goes viral, traffic climbs from 10,000 to 100,000 rps, PostgreSQL is the hidden bottleneck, and finance cuts the budget halfway through. [`docs/10x-traffic-incident.md`](docs/10x-traffic-incident.md) describes the learning experience, the hidden information, the decisions and trade-offs, and the results: five playbooks (four succeed, for different reasons) and a search of 14,336 plans with 192 successes, 3,152 partial outcomes and no dominant plan. `tests/traffic-incident.test.ts` covers each mechanic.
 
 ## Stress test
 
-[`docs/phase-1.5-stress-test.md`](docs/phase-1.5-stress-test.md) records whether the engine produces genuine trade-offs between reasonable strategies (it does: no strategy dominates), plus decision timing, investigation, delayed consequences, constraints, determinism, counterfactual replay, and the known modeling weaknesses. `tests/stress.test.ts` asserts its findings.
+[`docs/phase-1.5-stress-test.md`](docs/phase-1.5-stress-test.md) records the Phase 1.5 stress test of the engine on an earlier, smaller version of the scenario (300 → 3,000 rps), which has since been replaced. It covers trade-offs between strategies, decision timing, investigation, delayed consequences, constraints, determinism, counterfactual replay, and the known modeling weaknesses.

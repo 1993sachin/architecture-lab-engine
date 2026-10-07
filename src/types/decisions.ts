@@ -81,6 +81,10 @@ export interface DecisionRecord {
   revealed: ObservedValue[];
   stateBefore: SystemState;
   stateAfter: SystemState;
+  /** Change in recurring monthly cost caused by the decision. */
+  costImpact: Cost;
+  /** Change in complexity score caused by the decision. */
+  complexityImpact: number;
   consequences: Consequence[];
   sideEffects: string[];
 }

@@ -9,6 +9,8 @@ export const METRIC_DEFINITIONS: Readonly<Record<MetricId, MetricDefinition>> = 
   p99Latency: { id: "p99Latency", label: "p99 latency", unit: "ms", betterWhen: "lower", significantChange: 1 },
   errorRate: { id: "errorRate", label: "Error rate", unit: "ratio", betterWhen: "lower", significantChange: 0.001 },
   availability: { id: "availability", label: "Availability", unit: "ratio", betterWhen: "higher", significantChange: 0.001 },
+  throttleRate: { id: "throttleRate", label: "Throttled requests", unit: "ratio", betterWhen: "lower", significantChange: 0.001 },
+  serverErrorRate: { id: "serverErrorRate", label: "Server error rate", unit: "ratio", betterWhen: "lower", significantChange: 0.001 },
   cpuUtilization: { id: "cpuUtilization", label: "Application CPU utilization", unit: "ratio", betterWhen: "lower", significantChange: 0.01 },
   memoryUtilization: { id: "memoryUtilization", label: "Application memory utilization", unit: "ratio", betterWhen: "lower", significantChange: 0.01 },
   databaseUtilization: { id: "databaseUtilization", label: "Database utilization", unit: "ratio", betterWhen: "lower", significantChange: 0.01 },

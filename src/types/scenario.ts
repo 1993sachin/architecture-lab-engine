@@ -34,6 +34,14 @@ export interface CompletionConditions {
   failWhen?: Condition;
 }
 
+/** Puts a price on user impact, so runs can be compared in business terms. */
+export interface BusinessImpactModel {
+  /** Cost of one request that failed with an error (lost sale, support load…). */
+  valuePerFailedRequest: number;
+  /** Cost of one request rejected by rate limiting; usually lower, as some users retry. */
+  valuePerThrottledRequest: number;
+}
+
 export interface InitialSystemSpec {
   components: ComponentSpec[];
   dependencies: DependencySpec[];
@@ -64,6 +72,7 @@ export interface ScenarioDefinition {
   events?: EventDefinition[];
   objectives: Objective[];
   completion: CompletionConditions;
+  businessImpact?: BusinessImpactModel;
 }
 
 /** A validated scenario, ready to simulate. */
@@ -79,5 +88,6 @@ export interface Scenario {
   readonly events: readonly EventDefinition[];
   readonly objectives: readonly Objective[];
   readonly completion: CompletionConditions;
+  readonly businessImpact: BusinessImpactModel | null;
   readonly definition: ScenarioDefinition;
 }

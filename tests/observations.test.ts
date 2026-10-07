@@ -34,6 +34,25 @@ describe("observations", () => {
     expect(simulation.getObservations().map((value) => value.id)).toEqual(["latency", "db"]);
   });
 
+  it("observes configuration values and flags", () => {
+    const simulation = createSimulation(
+      buildScenario((definition) => {
+        definition.initialState.flags = { tier: "standard" };
+        definition.initialState.components[2] = { id: "db", type: "database", configuration: { writeCost: 1.25 } };
+        definition.observations = [
+          { id: "write-cost", label: "Write cost", signal: { kind: "configuration", componentId: "db", key: "writeCost" } },
+          { id: "tier", label: "Database tier", signal: { kind: "flag", flag: "tier" } },
+          { id: "missing", label: "Cache size", signal: { kind: "configuration", componentId: "cache", key: "size" } },
+        ];
+      }),
+    );
+    expect(simulation.getObservations()).toEqual([
+      { id: "write-cost", label: "Write cost", value: 1.25, text: "Write cost: 1.25" },
+      { id: "tier", label: "Database tier", value: "standard", text: "Database tier: standard" },
+      { id: "missing", label: "Cache size", value: null, text: "Cache size: not available" },
+    ]);
+  });
+
   it("rejects decisions that reveal unknown observations", () => {
     expect(() =>
       buildScenario((definition) => {
