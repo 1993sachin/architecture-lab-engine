@@ -1,5 +1,6 @@
 import type { DecisionRecord, DecisionStatus } from "./decisions.ts";
 import type { FiredEvent } from "./events.ts";
+import type { Constraint } from "./constraints.ts";
 import type { MetricId, Metrics } from "./metrics.ts";
 
 export type ConsequenceSource =
@@ -35,7 +36,9 @@ export interface MetricSample {
   monthlyCost: number;
   /** Ids of constraints violated at this moment. */
   violations: string[];
-  /** Requests failed (including throttled) during the interval ending here. */
+  /** Requests offered during the interval ending here. */
+  requests: number;
+  /** Requests that failed with an error (not counting throttled ones) during the interval. */
   failedRequests: number;
   /** Requests rejected by rate limiting during the interval ending here. */
   throttledRequests: number;
@@ -50,7 +53,9 @@ export type HistoryEntry =
   | { type: "decision"; time: number; record: DecisionRecord }
   | { type: "rejectedDecision"; time: number; decisionId: string; status: Exclude<DecisionStatus, "valid">; reasons: string[]; rationale: string }
   | { type: "event"; time: number; event: FiredEvent }
-  | { type: "advance"; from: number; to: number; consequences: Consequence[] };
+  | { type: "advance"; from: number; to: number; consequences: Consequence[] }
+  /** A constraint appeared, changed or was lifted. */
+  | { type: "constraint"; time: number; change: "added" | "updated" | "removed"; constraint: Constraint };
 
 export interface SimulationHistory {
   entries: HistoryEntry[];

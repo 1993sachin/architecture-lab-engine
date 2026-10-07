@@ -22,6 +22,18 @@ export function observe(observation: Observation, state: SystemState): ObservedV
           : `${observation.label}: ${round(value, 1)} rps`;
       return { ...base, value, text };
     }
+    case "configuration": {
+      const value = findComponent(state, signal.componentId)?.configuration[signal.key];
+      return value === undefined
+        ? { ...base, value: null, text: `${observation.label}: not available` }
+        : { ...base, value, text: `${observation.label}: ${String(value)}` };
+    }
+    case "flag": {
+      const value = state.flags[signal.flag];
+      return value === undefined
+        ? { ...base, value: null, text: `${observation.label}: not available` }
+        : { ...base, value, text: `${observation.label}: ${String(value)}` };
+    }
     case "component": {
       const component = findComponent(state, signal.componentId);
       if (!component) return { ...base, value: null, text: `${observation.label}: not available` };

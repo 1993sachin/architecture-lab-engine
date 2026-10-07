@@ -37,6 +37,12 @@ export function calculateMetricsInPlace(state: SystemState, tracked: readonly Me
     metrics.p99Latency = round(latency * tail.p99, 2);
     metrics.errorRate = round(errorRate);
     metrics.availability = round(1 - errorRate);
+    // Error rate counts rate-limited requests as failures (users see them); these split it.
+    const rps = state.workload.requestsPerSecond;
+    const throttled = state.components.reduce((sum, component) => sum + component.load.throttled, 0);
+    const throttleRate = rps > 0 ? clamp(throttled / rps, 0, errorRate) : 0;
+    metrics.throttleRate = round(throttleRate);
+    metrics.serverErrorRate = round(Math.max(0, errorRate - throttleRate));
   }
 
   const applications = state.components.filter((component) => component.type === "application");

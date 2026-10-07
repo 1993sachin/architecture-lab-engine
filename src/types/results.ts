@@ -42,12 +42,21 @@ export interface SimulationResult {
   };
   /** What the incident cost users and how long it lasted. */
   impact: {
-    /** Requests that failed, including rejected ones, over the run. */
+    /** Requests offered over the run. */
+    totalRequests: number;
+    successfulRequests: number;
+    /** Requests that failed with an error. */
     failedRequests: number;
-    /** Of those, requests deliberately rejected by rate limiting. */
+    /** Requests deliberately rejected by rate limiting (not counted in `failedRequests`). */
     throttledRequests: number;
+    /** Priced user impact from the scenario's business model; `null` without one. */
+    businessImpact: number | null;
     /** Minutes during which at least one constraint was violated. */
     minutesInViolation: number;
+    /** Minutes during which at least one metric constraint (SLO) was violated. */
+    sloViolationMinutes: number;
+    /** Minutes in violation per constraint id. */
+    violationMinutes: Record<string, number>;
     /** Fraction of elapsed time with no constraint violated. */
     compliance: number;
     /**

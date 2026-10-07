@@ -1,10 +1,10 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createScenario, createSimulation, replay, trafficSpikeScenario, type Simulation } from "../src/index.ts";
+import { createScenario, createSimulation, replay, trafficIncidentScenario, type Simulation } from "../src/index.ts";
 
 function play(): Simulation {
-  const simulation = createSimulation(createScenario(trafficSpikeScenario));
+  const simulation = createSimulation(createScenario(trafficIncidentScenario));
   simulation.advance(5);
   simulation.chooseDecision("scale-application", { rationale: "Application CPU is saturated." });
   simulation.chooseDecision("enable-cache", { rationale: "Reads dominate; offload the database." });
@@ -25,12 +25,12 @@ describe("determinism", () => {
 
   it("reproduces a run from its recorded actions", () => {
     const original = play();
-    const replayed = replay(createScenario(trafficSpikeScenario), original.getHistory().actions);
+    const replayed = replay(createScenario(trafficIncidentScenario), original.getHistory().actions);
     expect(replayed.getResult()).toEqual(original.getResult());
   });
 
   it("does not let one simulation affect another or the scenario", () => {
-    const scenario = createScenario(trafficSpikeScenario);
+    const scenario = createScenario(trafficIncidentScenario);
     const snapshot = structuredClone(scenario.initialState);
     const a = createSimulation(scenario);
     a.advance(5);

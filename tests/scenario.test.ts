@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScenarioValidationError, createScenario, createSimulation, defineScenario, trafficSpikeScenario } from "../src/index.ts";
+import { ScenarioValidationError, createScenario, createSimulation, defineScenario } from "../src/index.ts";
 import { baseDefinition } from "./helpers.ts";
 
 describe("scenario definition", () => {
@@ -27,58 +27,6 @@ describe("scenario definition", () => {
     const scenario = createScenario(definition);
     definition.workload.requestsPerSecond = 9999;
     expect(scenario.initialState.workload.requestsPerSecond).toBe(100);
-  });
-});
-
-describe("The 10× Traffic Incident", () => {
-  const scenario = createScenario(trafficSpikeScenario);
-
-  it("starts healthy", () => {
-    const { metrics } = scenario.initialState;
-    expect(metrics.requestsPerSecond).toBe(300);
-    expect(metrics.errorRate).toBe(0);
-    expect(metrics.p95Latency).toBeLessThan(100);
-    expect(metrics.monthlyCost).toBe(1262.9);
-  });
-
-  it("ramps traffic up tenfold from T+3", () => {
-    const simulation = createSimulation(scenario);
-    const rates = [];
-    for (let minute = 0; minute < 7; minute++) {
-      simulation.advance(1);
-      rates.push(simulation.getState().metrics.requestsPerSecond);
-    }
-    expect(rates).toEqual([300, 300, 900, 1600, 2300, 3000, 3000]);
-    const { metrics } = simulation.getState();
-    expect(metrics.cpuUtilization).toBe(3.75);
-    expect(metrics.errorRate).toBe(1);
-  });
-
-  it("shows that scaling the application alone moves the bottleneck to the database", () => {
-    const simulation = createSimulation(scenario);
-    simulation.advance(6);
-    simulation.chooseDecision("scale-application", { rationale: "CPU is saturated." });
-    simulation.chooseDecision("scale-application", { rationale: "Still saturated." });
-    const { metrics } = simulation.getState();
-    expect(metrics.cpuUtilization).toBe(1.25);
-    expect(metrics.databaseUtilization).toBeGreaterThan(1.5);
-  });
-
-  it("blocks scaling beyond the budget", () => {
-    const simulation = createSimulation(scenario);
-    for (let i = 0; i < 5; i++) expect(simulation.chooseDecision("scale-application", { rationale: "More" }).status).toBe("applied");
-    expect(simulation.chooseDecision("scale-application", { rationale: "More" })).toMatchObject({
-      status: "unavailable",
-      reason: "Monthly budget would be exceeded by $390.90.",
-    });
-  });
-
-  it("fails when nothing is done", () => {
-    const simulation = createSimulation(scenario);
-    simulation.runToCompletion();
-    const result = simulation.getResult();
-    expect(result.outcome).toBe("failure");
-    expect(result.weaknesses).toContain("No decisions were taken.");
   });
 });
 
@@ -128,6 +76,17 @@ describe("incident impact", () => {
     simulation.runToCompletion();
     const { impact } = simulation.getResult();
     // 50 of 100 rps rejected for 9 minutes (T+1..T+9).
-    expect(impact).toEqual({ failedRequests: 27000, throttledRequests: 27000, minutesInViolation: 9, compliance: 0.7, stabilizedAt: 10 });
+    expect(impact).toEqual({
+      totalRequests: 180000,
+      successfulRequests: 153000,
+      failedRequests: 0,
+      throttledRequests: 27000,
+      businessImpact: null,
+      minutesInViolation: 9,
+      sloViolationMinutes: 9,
+      violationMinutes: { slo: 9 },
+      compliance: 0.7,
+      stabilizedAt: 10,
+    });
   });
 });

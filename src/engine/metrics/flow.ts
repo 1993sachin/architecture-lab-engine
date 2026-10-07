@@ -97,9 +97,11 @@ export function calculateFlows(state: SystemState): Set<string> {
     const throttled = inbound - accepted;
     const acceptedFraction = inbound > 0 ? accepted / inbound : 1;
 
+    // Some requests cost more than others: `readCost`/`writeCost` weigh demand per request class.
+    const demand = acceptedFraction * (flow.read * numberConfig(component, "readCost", 1) + flow.write * numberConfig(component, "writeCost", 1));
     const capacity = effectiveCapacity(component);
     const noCapacity = capacity === 0;
-    const utilization = capacity === null || capacity === 0 ? 0 : accepted / capacity;
+    const utilization = capacity === null || capacity === 0 ? 0 : demand / capacity;
     const loadErrorRate = noCapacity ? 1 : overloadErrorRate(utilization);
     // A full queue can only take in what its consumers release; the rest is rejected.
     let overflowRate = 0;
@@ -107,7 +109,8 @@ export function calculateFlows(state: SystemState): Set<string> {
     if (behavior.asynchronous && maxDepth > 0 && component.backlog >= maxDepth && accepted > 0) {
       overflowRate = Math.max(0, 1 - drainCapacity(state, component) / accepted);
     }
-    const processErrorRate = 1 - (1 - profile.errorRate) * (1 - loadErrorRate) * (1 - overflowRate);
+    const baselineErrorRate = numberConfig(component, "baseErrorRate", 0);
+    const processErrorRate = 1 - (1 - profile.errorRate) * (1 - baselineErrorRate) * (1 - loadErrorRate) * (1 - overflowRate);
     const servedRead = flow.read * acceptedFraction * (1 - processErrorRate);
     const servedWrite = flow.write * acceptedFraction * (1 - processErrorRate);
     const served = servedRead + servedWrite;

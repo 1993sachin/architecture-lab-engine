@@ -1,4 +1,5 @@
 import type {
+  BusinessImpactModel,
   Consequence,
   ConstraintViolation,
   DecisionRecord,
@@ -26,6 +27,7 @@ export interface ResultInput {
   decisions: DecisionRecord[];
   consequences: Consequence[];
   violations: ConstraintViolation[];
+  businessImpact: BusinessImpactModel | null;
 }
 
 /** Share of the score from objectives; the rest comes from time spent within constraints. */
@@ -64,8 +66,12 @@ export function buildResult(input: ResultInput): SimulationResult {
   let spend = 0;
   let elapsed = 0;
   let minutesInViolation = 0;
+  let sloViolationMinutes = 0;
+  const violationMinutes: Record<string, number> = {};
+  let totalRequests = 0;
   let failedRequests = 0;
   let throttledRequests = 0;
+  const sloIds = new Set(input.finalState.constraints.filter((constraint) => constraint.kind === "metric").map((constraint) => constraint.id));
   for (let index = 1; index < samples.length; index++) {
     const previous = samples[index - 1] as MetricSample;
     const sample = samples[index] as MetricSample;
@@ -73,6 +79,9 @@ export function buildResult(input: ResultInput): SimulationResult {
     weightedAvailability += minutes * (sample.metrics.availability ?? 1);
     spend += (previous.monthlyCost * minutes) / MINUTES_PER_MONTH;
     if (sample.violations.length > 0) minutesInViolation += minutes;
+    if (sample.violations.some((id) => sloIds.has(id))) sloViolationMinutes += minutes;
+    for (const id of sample.violations) violationMinutes[id] = (violationMinutes[id] ?? 0) + minutes;
+    totalRequests += sample.requests;
     failedRequests += sample.failedRequests;
     throttledRequests += sample.throttledRequests;
     elapsed += minutes;
@@ -80,7 +89,6 @@ export function buildResult(input: ResultInput): SimulationResult {
   const compliance = elapsed > 0 ? 1 - minutesInViolation / elapsed : (samples[0]?.violations.length ?? 0) === 0 ? 1 : 0;
 
   // Stabilized: from this sample on, every metric constraint (SLO) held.
-  const sloIds = new Set(input.finalState.constraints.filter((constraint) => constraint.kind === "metric").map((constraint) => constraint.id));
   let stabilizedAt: number | null = null;
   for (let index = samples.length - 1; index >= 0; index--) {
     const sample = samples[index] as MetricSample;
@@ -134,9 +142,16 @@ export function buildResult(input: ResultInput): SimulationResult {
       finalComplexity: input.finalState.complexityScore,
     },
     impact: {
+      totalRequests: Math.round(totalRequests),
+      successfulRequests: Math.round(totalRequests - failedRequests - throttledRequests),
       failedRequests: Math.round(failedRequests),
       throttledRequests: Math.round(throttledRequests),
+      businessImpact: input.businessImpact
+        ? round(failedRequests * input.businessImpact.valuePerFailedRequest + throttledRequests * input.businessImpact.valuePerThrottledRequest, 2)
+        : null,
       minutesInViolation,
+      sloViolationMinutes,
+      violationMinutes,
       compliance: round(compliance),
       stabilizedAt,
     },

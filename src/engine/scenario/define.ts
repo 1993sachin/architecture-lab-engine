@@ -52,6 +52,7 @@ export function createScenario(input: ScenarioDefinition): Scenario {
     events: definition.events ?? [],
     objectives: definition.objectives,
     completion: definition.completion,
+    businessImpact: definition.businessImpact ?? null,
     definition,
   });
 }

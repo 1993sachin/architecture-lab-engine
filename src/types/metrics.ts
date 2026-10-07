@@ -12,6 +12,8 @@ export const METRIC_IDS = [
   "p99Latency",
   "errorRate",
   "availability",
+  "throttleRate",
+  "serverErrorRate",
   "cpuUtilization",
   "memoryUtilization",
   "databaseUtilization",
