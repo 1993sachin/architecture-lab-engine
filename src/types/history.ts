@@ -33,6 +33,12 @@ export interface MetricSample {
   complexityScore: number;
   /** Always recorded, even when `monthlyCost` is not a tracked metric. */
   monthlyCost: number;
+  /** Ids of constraints violated at this moment. */
+  violations: string[];
+  /** Requests failed (including throttled) during the interval ending here. */
+  failedRequests: number;
+  /** Requests rejected by rate limiting during the interval ending here. */
+  throttledRequests: number;
 }
 
 /** An action that can be replayed to reproduce a simulation exactly. */

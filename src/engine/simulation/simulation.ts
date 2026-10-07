@@ -9,6 +9,7 @@ import type {
   FiredEvent,
   HistoryEntry,
   MetricSample,
+  ObservedValue,
   Scenario,
   SimulationAction,
   SimulationHistory,
@@ -27,9 +28,11 @@ import { EffectError, SimulationError } from "../errors.ts";
 import { dueEvents } from "../events/process.ts";
 import { diffStates } from "../history/consequences.ts";
 import { calculateMetricsInPlace } from "../metrics/calculate.ts";
+import { observe } from "../observations/observe.ts";
 import { ObjectiveTracker } from "../scoring/objectives.ts";
 import { buildResult } from "../scoring/result.ts";
 import { cloneState } from "../state/clone.ts";
+import { round } from "../state/numeric.ts";
 import { applyOngoingEffects, type ActiveOngoingEffect } from "./ongoing.ts";
 import { advanceTime } from "./time.ts";
 
@@ -53,6 +56,8 @@ export interface Simulation {
   getState(): SystemState;
   /** Current logical time in minutes. */
   getTime(): number;
+  /** What the engineer can currently observe. Investigation decisions reveal more. */
+  getObservations(): ObservedValue[];
   /** Every decision in the scenario with its current validation status. */
   getDecisions(): DecisionOption[];
   validateDecision(decisionId: string): DecisionValidation;
@@ -108,16 +113,25 @@ class DeterministicSimulation implements Simulation {
   #violations = new ViolationTracker();
   #objectives: ObjectiveTracker;
   #endReason: EndReason = "inProgress";
+  #visible: Set<string>;
+  #currentViolations: string[] = [];
 
   constructor(scenario: Scenario) {
     this.scenario = scenario;
     this.#objectives = new ObjectiveTracker(scenario.objectives);
+    this.#visible = new Set(scenario.observations.filter((observation) => observation.visible !== false).map((observation) => observation.id));
     this.#state = cloneState(scenario.initialState);
     // Events scheduled for T+0 shape the starting situation.
     this.#processEvents(this.#state);
     calculateMetricsInPlace(this.#state, scenario.metrics);
-    this.#observe();
-    this.#sample();
+    this.#observe(0);
+    this.#sample(0);
+  }
+
+  getObservations(): ObservedValue[] {
+    return this.scenario.observations
+      .filter((observation) => this.#visible.has(observation.id))
+      .map((observation) => observe(observation, this.#state));
   }
 
   getState(): SystemState {
@@ -178,6 +192,7 @@ class DeterministicSimulation implements Simulation {
     const decision = this.scenario.decisions.find((candidate) => candidate.id === decisionId);
     if (!decision) throw new SimulationError(`Decision "${decisionId}" disappeared after validation.`);
 
+    const knowledge = this.getObservations();
     const before = this.#state;
     const application = applyDecision(before, decision, this.#decisionsTaken, this.scenario.metrics);
     this.#state = application.state;
@@ -185,6 +200,11 @@ class DeterministicSimulation implements Simulation {
     for (const effect of application.ongoingEffects) {
       this.#ongoing.push({ sourceId: decisionId, effect, startedAt: this.#state.time });
     }
+
+    for (const id of decision.reveals ?? []) this.#visible.add(id);
+    const revealed = this.scenario.observations
+      .filter((observation) => decision.reveals?.includes(observation.id))
+      .map((observation) => observe(observation, this.#state));
 
     const consequences = diffStates(before, this.#state, { kind: "decision", decisionId }, () => this.#nextConsequenceId());
     this.#consequences.push(...consequences);
@@ -194,6 +214,8 @@ class DeterministicSimulation implements Simulation {
       title: decision.title,
       timestamp: this.#state.time,
       rationale,
+      knowledge,
+      revealed,
       stateBefore: cloneState(before),
       stateAfter: cloneState(this.#state),
       consequences,
@@ -201,7 +223,9 @@ class DeterministicSimulation implements Simulation {
     };
     this.#decisions.push(record);
     this.#entries.push({ type: "decision", time: this.#state.time, record });
-    this.#observe();
+    this.#observe(0);
+    // Time the team spends on the decision; the world moves on meanwhile.
+    if (decision.duration && !this.isComplete()) this.#advance(decision.duration);
     return { status: "applied", record: structuredClone(record) };
   }
 
@@ -212,7 +236,11 @@ class DeterministicSimulation implements Simulation {
     }
     if (this.isComplete()) throw new SimulationError("The scenario has ended; it cannot advance further.");
     this.#actions.push({ type: "advance", minutes });
+    return this.#advance(minutes);
+  }
 
+  #advance(minutes: number): AdvanceReport {
+    const step = this.scenario.timeStep;
     const before = this.#state;
     const fired: FiredEvent[] = [];
     const causes: string[] = [];
@@ -287,8 +315,8 @@ class DeterministicSimulation implements Simulation {
 
     calculateMetricsInPlace(draft, this.scenario.metrics);
     this.#state = draft;
-    this.#observe();
-    this.#sample();
+    this.#observe(minutes);
+    this.#sample(minutes);
 
     return { events, causes: [...events.map((event) => `event:${event.eventId}`), ...ongoing.applied.map((id) => `ongoing:${id}`)] };
   }
@@ -316,10 +344,12 @@ class DeterministicSimulation implements Simulation {
   }
 
   /** Checks constraints, objectives and completion against the current state. */
-  #observe(): void {
+  #observe(minutes: number): void {
     const context = this.#conditionContext();
-    this.#violations.update(this.#state, checkConstraints(context));
-    this.#objectives.observe(context);
+    const checks = checkConstraints(context);
+    this.#currentViolations = checks.filter((check) => !check.satisfied).map((check) => check.constraintId);
+    this.#violations.update(this.#state, checks);
+    this.#objectives.observe(context, minutes);
 
     const { completion } = this.scenario;
     if (completion.failWhen && evaluateCondition(completion.failWhen, context)) this.#endReason = "failCondition";
@@ -327,12 +357,19 @@ class DeterministicSimulation implements Simulation {
     else if (this.#state.time >= completion.maxDuration) this.#endReason = "maxDuration";
   }
 
-  #sample(): void {
+  /** Records the state at the end of an interval of `minutes`. */
+  #sample(minutes: number): void {
+    const seconds = minutes * 60;
+    const throttled = this.#state.components.reduce((sum, component) => sum + component.load.throttled, 0);
+    const errorRate = this.#state.metrics.errorRate ?? 0;
     this.#samples.push({
       time: this.#state.time,
       metrics: { ...this.#state.metrics },
       complexityScore: this.#state.complexityScore,
       monthlyCost: totalCost(this.#state).monthly,
+      violations: [...this.#currentViolations],
+      failedRequests: round(this.#state.workload.requestsPerSecond * errorRate * seconds, 2),
+      throttledRequests: round(throttled * seconds, 2),
     });
   }
 

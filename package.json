@@ -24,7 +24,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "example": "node examples/traffic-spike.ts"
+    "example": "node examples/traffic-spike.ts",
+    "report:strategies": "node tests/support/strategy-report.ts",
+    "report:landscape": "node tests/support/landscape.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

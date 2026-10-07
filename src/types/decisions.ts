@@ -1,6 +1,7 @@
 import type { Cost, CostInput } from "./components.ts";
 import type { Condition } from "./conditions.ts";
 import type { Effect, OngoingEffect } from "./effects.ts";
+import type { ObservedValue } from "./observations.ts";
 import type { Consequence } from "./history.ts";
 import type { SystemState } from "./state.ts";
 
@@ -39,6 +40,13 @@ export interface DecisionDefinition {
   requires?: Record<string, number>;
   /** Whether the decision can be taken more than once. Defaults to false. */
   repeatable?: boolean;
+  /** Observation ids this decision makes visible (investigation). */
+  reveals?: string[];
+  /**
+   * Logical minutes the team spends on it. The simulation advances by this much
+   * right after the decision is applied, so the world moves on meanwhile.
+   */
+  duration?: number;
 }
 
 export interface DecisionPreview {
@@ -67,6 +75,10 @@ export interface DecisionRecord {
   /** Logical time (minutes) when the decision was taken. */
   timestamp: number;
   rationale: string;
+  /** What the engineer could observe when deciding. */
+  knowledge: ObservedValue[];
+  /** What the decision revealed, valued right after it was applied. */
+  revealed: ObservedValue[];
   stateBefore: SystemState;
   stateAfter: SystemState;
   consequences: Consequence[];

@@ -40,13 +40,14 @@ describe("capacity and latency", () => {
     expect(singleApp(90).metrics.latency).toBeGreaterThan(singleApp(50).metrics.latency ?? 0);
   });
 
-  it("fails excess requests when capacity is exceeded", () => {
+  it("fails more than the excess when capacity is exceeded (congestion collapse)", () => {
     expect(overloadErrorRate(1)).toBe(0);
-    expect(overloadErrorRate(2)).toBeCloseTo(0.55);
+    expect(overloadErrorRate(2)).toBeCloseTo(0.8);
+    expect(overloadErrorRate(4)).toBe(1);
     const state = singleApp(200);
     expect(component(state, "app").utilization).toBe(2);
-    expect(state.metrics.errorRate).toBeCloseTo(0.55);
-    expect(state.metrics.availability).toBeCloseTo(0.45);
+    expect(state.metrics.errorRate).toBeCloseTo(0.8);
+    expect(state.metrics.availability).toBeCloseTo(0.2);
   });
 
   it("reports only metrics that apply to the system", () => {
@@ -186,5 +187,29 @@ describe("caches, rate limits and queues", () => {
     expect(simulation.getState().metrics.queueDepth).toBe(3000);
     simulation.advance(2);
     expect(simulation.getState().metrics.queueDepth).toBe(0);
+  });
+});
+
+describe("bounded queues", () => {
+  it("rejects new work once the queue is full", () => {
+    const scenario = buildScenario((definition) => {
+      definition.workload = { requestsPerSecond: 100, readRatio: 0 };
+      definition.initialState.components.push(
+        { id: "queue", type: "queue", configuration: { maxDepth: 4500 } },
+        { id: "worker", type: "worker", capacity: 50 },
+      );
+      definition.initialState.dependencies = [
+        { from: "client", to: "app" },
+        { from: "app", to: "queue" },
+        { from: "queue", to: "worker" },
+      ];
+    });
+    const simulation = createSimulation(scenario);
+    simulation.advance(1);
+    // 50 rps more than the worker takes: 3,000 messages after a minute, still accepting.
+    expect(simulation.getState().metrics).toMatchObject({ queueDepth: 3000, errorRate: 0 });
+    simulation.advance(1);
+    // Full (capped at 4,500): only what the worker drains is accepted.
+    expect(simulation.getState().metrics).toMatchObject({ queueDepth: 4500, errorRate: 0.5 });
   });
 });

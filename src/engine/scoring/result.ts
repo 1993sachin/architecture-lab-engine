@@ -28,8 +28,8 @@ export interface ResultInput {
   violations: ConstraintViolation[];
 }
 
-/** Score penalty per constraint violation period. */
-const VIOLATION_PENALTY = 5;
+/** Share of the score from objectives; the rest comes from time spent within constraints. */
+const OBJECTIVE_WEIGHT = 70;
 /** Error rate above which a peak is called out as a weakness. */
 const NOTABLE_ERROR_RATE = 0.05;
 
@@ -63,13 +63,29 @@ export function buildResult(input: ResultInput): SimulationResult {
   let weightedAvailability = 0;
   let spend = 0;
   let elapsed = 0;
+  let minutesInViolation = 0;
+  let failedRequests = 0;
+  let throttledRequests = 0;
   for (let index = 1; index < samples.length; index++) {
     const previous = samples[index - 1] as MetricSample;
     const sample = samples[index] as MetricSample;
     const minutes = sample.time - previous.time;
     weightedAvailability += minutes * (sample.metrics.availability ?? 1);
     spend += (previous.monthlyCost * minutes) / MINUTES_PER_MONTH;
+    if (sample.violations.length > 0) minutesInViolation += minutes;
+    failedRequests += sample.failedRequests;
+    throttledRequests += sample.throttledRequests;
     elapsed += minutes;
+  }
+  const compliance = elapsed > 0 ? 1 - minutesInViolation / elapsed : (samples[0]?.violations.length ?? 0) === 0 ? 1 : 0;
+
+  // Stabilized: from this sample on, every metric constraint (SLO) held.
+  const sloIds = new Set(input.finalState.constraints.filter((constraint) => constraint.kind === "metric").map((constraint) => constraint.id));
+  let stabilizedAt: number | null = null;
+  for (let index = samples.length - 1; index >= 0; index--) {
+    const sample = samples[index] as MetricSample;
+    if (sample.violations.some((id) => sloIds.has(id))) break;
+    stabilizedAt = sample.time;
   }
   const availability = elapsed > 0 ? weightedAvailability / elapsed : (samples[0]?.metrics.availability ?? 1);
   const peakError = peak((sample) => sample.metrics.errorRate);
@@ -78,7 +94,10 @@ export function buildResult(input: ResultInput): SimulationResult {
   const weaknesses: string[] = [];
   for (const result of objectiveResults) {
     if (result.met) strengths.push(`Objective met: ${result.description}.`);
-    else if (result.firstFailedAt !== null) weaknesses.push(`Objective missed: ${result.description} (first missed at ${formatTime(result.firstFailedAt)}).`);
+    else if (result.evaluation === "fractionOfTime") {
+      const required = input.objectives.find((objective) => objective.id === result.objectiveId)?.threshold ?? 1;
+      weaknesses.push(`Objective missed: ${result.description} (held ${round(result.achieved * 100, 1)}% of the time; needed ${round(required * 100, 1)}%).`);
+    } else if (result.firstFailedAt !== null) weaknesses.push(`Objective missed: ${result.description} (first missed at ${formatTime(result.firstFailedAt)}).`);
     else weaknesses.push(`Objective missed: ${result.description}.`);
   }
   if (violations.length === 0) strengths.push("No constraints were violated.");
@@ -114,7 +133,14 @@ export function buildResult(input: ResultInput): SimulationResult {
       peakQueueDepth: peak((sample) => sample.metrics.queueDepth).value,
       finalComplexity: input.finalState.complexityScore,
     },
-    score: Math.max(0, Math.round(metFraction * 100) - VIOLATION_PENALTY * violations.length),
+    impact: {
+      failedRequests: Math.round(failedRequests),
+      throttledRequests: Math.round(throttledRequests),
+      minutesInViolation,
+      compliance: round(compliance),
+      stabilizedAt,
+    },
+    score: Math.round(OBJECTIVE_WEIGHT * metFraction + (100 - OBJECTIVE_WEIGHT) * compliance),
     objectives: objectiveResults,
     decisions,
     consequences: input.consequences,

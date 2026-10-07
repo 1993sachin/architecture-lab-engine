@@ -6,6 +6,7 @@ export * from "./effects.ts";
 export * from "./events.ts";
 export * from "./history.ts";
 export * from "./metrics.ts";
+export * from "./observations.ts";
 export * from "./results.ts";
 export * from "./scenario.ts";
 export * from "./state.ts";

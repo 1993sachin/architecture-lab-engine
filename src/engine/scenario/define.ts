@@ -14,6 +14,7 @@ import { graphIssues } from "../components/graph.ts";
 import { toCost } from "../costs/cost.ts";
 import { ScenarioValidationError } from "../errors.ts";
 import { calculateMetricsInPlace } from "../metrics/calculate.ts";
+import { defaultObservations } from "../observations/observe.ts";
 
 /**
  * Identity helper that gives scenario literals full type checking.
@@ -45,6 +46,7 @@ export function createScenario(input: ScenarioDefinition): Scenario {
     description: definition.description ?? "",
     timeStep,
     metrics: tracked,
+    observations: definition.observations ?? defaultObservations(tracked),
     initialState,
     decisions: definition.decisions,
     events: definition.events ?? [],
@@ -114,6 +116,11 @@ function validateDefinition(definition: ScenarioDefinition): string[] {
   issues.push(...duplicates("decision", definition.decisions.map((decision) => decision.id)));
   issues.push(...duplicates("event", (definition.events ?? []).map((event) => event.id)));
   issues.push(...duplicates("objective", definition.objectives.map((objective) => objective.id)));
+  issues.push(...duplicates("observation", (definition.observations ?? []).map((observation) => observation.id)));
+  const observationIds = new Set((definition.observations ?? defaultObservations(definition.metrics ?? null)).map((observation) => observation.id));
+  for (const observation of definition.observations ?? []) {
+    if (observation.signal.kind === "metric") check(METRIC_IDS.includes(observation.signal.metric), `Observation "${observation.id}" uses unknown metric "${observation.signal.metric}".`);
+  }
 
   for (const decision of definition.decisions) {
     const where = `Decision "${decision.id}"`;
@@ -126,6 +133,10 @@ function validateDefinition(definition: ScenarioDefinition): string[] {
     }
     issues.push(...effectIssues(decision.immediateEffects, where));
     issues.push(...ongoingIssues(decision.ongoingEffects ?? [], where));
+    for (const id of decision.reveals ?? []) check(observationIds.has(id), `${where} reveals unknown observation "${id}".`);
+    if (decision.duration !== undefined) {
+      check(Number.isInteger(decision.duration) && decision.duration >= 0 && decision.duration % timeStep === 0, `${where} duration must be a whole multiple of timeStep.`);
+    }
     for (const [resource, amount] of Object.entries(decision.requires ?? {})) {
       check(isNonNegative(amount), `${where} requires a negative amount of "${resource}".`);
     }
@@ -149,7 +160,13 @@ function validateDefinition(definition: ScenarioDefinition): string[] {
   }
 
   check(definition.objectives.length > 0, "A scenario needs at least one objective.");
-  for (const objective of definition.objectives) issues.push(...conditionIssues(objective.condition, `Objective "${objective.id}"`));
+  for (const objective of definition.objectives) {
+    issues.push(...conditionIssues(objective.condition, `Objective "${objective.id}"`));
+    if (objective.evaluation === "fractionOfTime") {
+      const threshold = objective.threshold;
+      check(threshold !== undefined && threshold >= 0 && threshold <= 1, `Objective "${objective.id}" needs a threshold between 0 and 1.`);
+    }
+  }
 
   const { maxDuration, endWhen, failWhen } = definition.completion;
   check(Number.isInteger(maxDuration) && maxDuration > 0, "completion.maxDuration must be a positive whole number of minutes.");

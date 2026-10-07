@@ -4,13 +4,13 @@ import { createScenario, createSimulation, trafficSpikeScenario } from "../src/i
 describe("decision history", () => {
   it("records each decision with its rationale, timestamp and before/after state", () => {
     const simulation = createSimulation(createScenario(trafficSpikeScenario));
-    simulation.advance(5);
+    simulation.advance(3);
     const rationale = "Read traffic is dominant and database latency is increasing.";
     const outcome = simulation.chooseDecision("enable-cache", { rationale });
     expect(outcome.status).toBe("applied");
 
     const [record] = simulation.getHistory().decisions;
-    expect(record).toMatchObject({ sequence: 1, decisionId: "enable-cache", title: "Add a read-through cache", timestamp: 5, rationale });
+    expect(record).toMatchObject({ sequence: 1, decisionId: "enable-cache", title: "Add a read-through cache", timestamp: 3, rationale });
     expect(record?.stateBefore.components.map((c) => c.id)).not.toContain("cache");
     expect(record?.stateAfter.components.map((c) => c.id)).toContain("cache");
     expect(record?.stateAfter.metrics.databaseUtilization).toBeLessThan(record?.stateBefore.metrics.databaseUtilization ?? 0);
@@ -18,7 +18,7 @@ describe("decision history", () => {
 
   it("describes consequences with direction and severity", () => {
     const simulation = createSimulation(createScenario(trafficSpikeScenario));
-    simulation.advance(5);
+    simulation.advance(3);
     const outcome = simulation.chooseDecision("enable-cache", { rationale: "Offload reads" });
     if (outcome.status !== "applied") throw new Error(outcome.reason);
     const bySubject = new Map(outcome.record.consequences.map((c) => [JSON.stringify(c.subject), c]));
@@ -36,7 +36,7 @@ describe("decision history", () => {
     const simulation = createSimulation(createScenario(trafficSpikeScenario));
     const report = simulation.advance(5);
     const latency = report.consequences.find((c) => c.subject.kind === "metric" && c.subject.metric === "p95Latency");
-    expect(latency).toMatchObject({ impact: "negative", severity: "critical", source: { kind: "progression", from: 0, to: 5, causes: ["event:traffic-spike"] } });
+    expect(latency).toMatchObject({ impact: "negative", severity: "critical", source: { kind: "progression", from: 0, to: 5, causes: ["event:traffic-spike", "ongoing:traffic-spike/ramp"] } });
   });
 
   it("keeps a chronological log of decisions, events, rejections and progress", () => {

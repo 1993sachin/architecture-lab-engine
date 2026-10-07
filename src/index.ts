@@ -28,5 +28,6 @@ export { calculateMetrics } from "./engine/metrics/calculate.ts";
 export { METRIC_DEFINITIONS, formatMetric } from "./engine/metrics/definitions.ts";
 export { overloadErrorRate, queueingFactor } from "./engine/metrics/flow.ts";
 export { diffStates } from "./engine/history/consequences.ts";
+export { observe } from "./engine/observations/observe.ts";
 
 export { trafficSpikeScenario } from "./scenarios/traffic-spike.ts";
