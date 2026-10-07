@@ -103,7 +103,8 @@ export const COMPONENT_CATALOG: Readonly<Record<ComponentType, ComponentTypeDefi
   queue: {
     type: "queue",
     label: "Queue",
-    defaults: { capacity: 10000, baseLatencyMs: 3, hourlyCost: 0.15, configuration: {} },
+    // `maxDepth` (messages, 0 = unbounded): once full, the queue rejects what consumers cannot take.
+    defaults: { capacity: 10000, baseLatencyMs: 3, hourlyCost: 0.15, configuration: { maxDepth: 0 } },
     behavior: { ...forwardAll, asynchronous: true },
   },
   objectStorage: {

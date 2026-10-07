@@ -34,8 +34,8 @@ import { createScenario, createSimulation, trafficSpikeScenario } from "@archite
 const scenario = createScenario(trafficSpikeScenario);
 const simulation = createSimulation(scenario);
 
-simulation.advance(5);                       // T+5 min: the traffic spike hits
-simulation.getState().metrics.errorRate;     // 0.8708
+simulation.advance(6);                       // T+6 min: traffic has climbed tenfold
+simulation.getState().metrics.errorRate;     // 1: the application has collapsed
 
 const outcome = simulation.chooseDecision("enable-cache", {
   rationale: "Read traffic is dominant and database latency is increasing.",
@@ -54,13 +54,15 @@ const result = simulation.getResult();       // outcome, metrics, decisions, str
 | **System state** | Everything about the simulated system at one logical moment: components, dependencies, workload, costs, complexity, resources, flags, constraints, metrics. Plain, serializable data. | `src/types/state.ts` |
 | **Component** | A generic building block (`client`, `apiGateway`, `loadBalancer`, `application`, `cache`, `database`, `databaseReplica`, `queue`, `objectStorage`, `cdn`, `worker`) with capacity, instances, health, cost, configuration and calculated utilization. | `src/engine/components/` |
 | **Dependency graph** | Directed edges saying who calls whom, for which traffic (`all`, `read`, `write`) and what share. Must be acyclic. | `src/engine/components/graph.ts` |
-| **Decision** | An action the engineer takes: prerequisites, immediate effects, ongoing effects, cost impact, complexity impact, side effects, resources required. | `src/engine/decisions/` |
+| **Decision** | An action the engineer takes: prerequisites, immediate effects, ongoing effects, cost impact, complexity impact, side effects, resources required, and optionally the time it takes (`duration`) and what it reveals (`reveals`). | `src/engine/decisions/` |
+| **Observation** | What the engineer can see: a metric, the workload mix, or one component's utilization, health, latency or errors. Some start hidden; investigation decisions reveal them without changing the system. | `src/engine/observations/` |
 | **Effect** | A declarative state change (add a component, scale it, redirect traffic, change a constraint, …). Decisions and events are built from effects. | `src/engine/effects/` |
 | **Event** | Something that happens to the engineer: a traffic spike, a failing database, a budget cut. Fires at a logical time or when a condition first holds. | `src/engine/events/` |
 | **Constraint** | A limit: budget, complexity (what the team can operate), a metric bound, a requirement such as data residency, or a deadline. Can change mid-scenario. | `src/engine/constraints/` |
 | **Consequence** | A deterministic description of something that changed, classified as positive/negative/neutral with a severity. | `src/engine/history/` |
-| **Decision record** | Every applied decision: id, logical timestamp, the engineer's rationale (kept verbatim), state before and after, consequences, side effects. | `src/types/decisions.ts` |
-| **Result** | Outcome (`success`/`partial`/`failure`), peak and time-weighted metrics, cost, complexity, objectives, constraint violations, strengths and weaknesses. | `src/engine/scoring/` |
+| **Decision record** | Every applied decision: id, logical timestamp, the engineer's rationale (kept verbatim), what they could observe at the time, what it revealed, state before and after, consequences, side effects. | `src/types/decisions.ts` |
+| **Objective** | What counts as doing well: a condition that must hold at the end (`final`), at every tick (`throughout`), or for a share of the time (`fractionOfTime` with a `threshold`). | `src/engine/scoring/objectives.ts` |
+| **Result** | Outcome (`success`/`partial`/`failure`), score, peak and time-weighted metrics, cost, complexity, objectives, constraint violations, incident impact (failed and throttled requests, minutes in violation, when it stabilized), strengths and weaknesses. | `src/engine/scoring/` |
 
 ### Metrics
 
@@ -86,8 +88,9 @@ Current state
   → apply immediate effects, cost impact, complexity, resources
   → apply side effects whose condition holds
   → calculate metrics
-  → generate consequences + decision record
-  → start ongoing effects
+  → generate consequences + decision record (with what was observable)
+  → start ongoing effects, reveal observations
+  → if the decision has a duration, advance that many minutes
 ```
 
 **Each tick**
@@ -217,10 +220,12 @@ src/
     metrics/        metric definitions and the flow model
     costs/          cost model
     history/        consequence generation
+    observations/   what the engineer can see
     scoring/        objectives and the final result
   scenarios/        built-in scenarios
   index.ts          public API
-tests/              Vitest unit and scenario tests
+tests/              Vitest unit, scenario and stress tests (tests/support: strategies and reports)
+docs/               analysis and reports
 examples/           runnable examples
 ```
 
@@ -233,3 +238,9 @@ examples/           runnable examples
 | `npm run typecheck` | Type-check source, tests and examples |
 | `npm run build` | Compile `src/` to `dist/` with type declarations |
 | `npm run example` | Play the built-in traffic-spike scenario |
+| `npm run report:strategies` | Compare five strategies on the traffic-spike scenario |
+| `npm run report:landscape` | Brute-force the scenario's decision space and print the Pareto front |
+
+## Stress test
+
+[`docs/phase-1.5-stress-test.md`](docs/phase-1.5-stress-test.md) records whether the engine produces genuine trade-offs between reasonable strategies (it does: no strategy dominates), plus decision timing, investigation, delayed consequences, constraints, determinism, counterfactual replay, and the known modeling weaknesses. `tests/stress.test.ts` asserts its findings.

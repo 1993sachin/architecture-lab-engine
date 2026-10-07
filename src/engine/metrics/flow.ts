@@ -22,8 +22,11 @@ import { round } from "../state/numeric.ts";
  */
 
 const DEFAULT_TIMEOUT_MS = 1000;
-/** Extra failure fraction per unit of overload: overloaded systems shed more than their excess. */
-const OVERLOAD_COLLAPSE = 0.05;
+/**
+ * Extra failure fraction per unit of overload. Overloaded systems fail more than
+ * their excess (timeouts, retries, thrashing), which is why shedding load early helps.
+ */
+const OVERLOAD_COLLAPSE = 0.3;
 
 interface Flow {
   read: number;
@@ -98,7 +101,13 @@ export function calculateFlows(state: SystemState): Set<string> {
     const noCapacity = capacity === 0;
     const utilization = capacity === null || capacity === 0 ? 0 : accepted / capacity;
     const loadErrorRate = noCapacity ? 1 : overloadErrorRate(utilization);
-    const processErrorRate = 1 - (1 - profile.errorRate) * (1 - loadErrorRate);
+    // A full queue can only take in what its consumers release; the rest is rejected.
+    let overflowRate = 0;
+    const maxDepth = numberConfig(component, "maxDepth", 0);
+    if (behavior.asynchronous && maxDepth > 0 && component.backlog >= maxDepth && accepted > 0) {
+      overflowRate = Math.max(0, 1 - drainCapacity(state, component) / accepted);
+    }
+    const processErrorRate = 1 - (1 - profile.errorRate) * (1 - loadErrorRate) * (1 - overflowRate);
     const servedRead = flow.read * acceptedFraction * (1 - processErrorRate);
     const servedWrite = flow.write * acceptedFraction * (1 - processErrorRate);
     const served = servedRead + servedWrite;

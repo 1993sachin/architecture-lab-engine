@@ -3,10 +3,13 @@ import { defineScenario } from "../engine/scenario/define.ts";
 /**
  * The 10× Traffic Incident.
  *
- * A read-heavy product API runs comfortably at 300 rps. Five minutes in, a
- * launch goes viral and traffic jumps tenfold. The engineer must keep the
- * service up within a budget that finance later cuts, without building more
- * than a small team can operate.
+ * A read-heavy product API runs comfortably at 300 rps. At T+3 a launch goes
+ * viral and traffic climbs tenfold over the next few minutes. The engineer
+ * must keep the service up within a budget that finance later cuts, without
+ * building more than a small team can operate.
+ *
+ * Only headline metrics are visible at first. The read/write mix and the
+ * database's condition must be investigated, which takes time.
  */
 export const trafficSpikeScenario = defineScenario({
   id: "traffic-spike",
@@ -14,6 +17,19 @@ export const trafficSpikeScenario = defineScenario({
   description:
     "A read-heavy API is hit by a tenfold traffic spike. Keep latency and errors under control within budget and team capacity.",
   timeStep: 1,
+  observations: [
+    { id: "request-rate", label: "Request rate", signal: { kind: "metric", metric: "requestsPerSecond" } },
+    { id: "latency", label: "Average latency", signal: { kind: "metric", metric: "latency" } },
+    { id: "p95-latency", label: "p95 latency", signal: { kind: "metric", metric: "p95Latency" } },
+    { id: "error-rate", label: "Error rate", signal: { kind: "metric", metric: "errorRate" } },
+    { id: "app-cpu", label: "Application CPU", signal: { kind: "metric", metric: "cpuUtilization" } },
+    { id: "monthly-cost", label: "Monthly cost", signal: { kind: "metric", metric: "monthlyCost" } },
+    { id: "cache-hit-rate", label: "Cache hit rate", signal: { kind: "metric", metric: "cacheHitRate" } },
+    { id: "queue-depth", label: "Queue depth", signal: { kind: "metric", metric: "queueDepth" } },
+    { id: "read-ratio", label: "Traffic mix", signal: { kind: "workload", property: "readRatio" }, visible: false },
+    { id: "database-utilization", label: "Database utilization", signal: { kind: "metric", metric: "databaseUtilization" }, visible: false },
+    { id: "database-latency", label: "Database latency", signal: { kind: "component", componentId: "db", property: "latencyMs" }, visible: false },
+  ],
   workload: { requestsPerSecond: 300, readRatio: 0.8 },
   resources: { engineerDays: 8 },
   initialState: {
@@ -34,12 +50,30 @@ export const trafficSpikeScenario = defineScenario({
     ],
   },
   constraints: [
-    { id: "budget", kind: "budget", description: "Monthly infrastructure budget", limit: 3000 },
+    { id: "budget", kind: "budget", description: "Monthly infrastructure budget", limit: 3500 },
     { id: "team", kind: "complexity", description: "What a team of four can operate", limit: 10 },
     { id: "latency-slo", kind: "metric", description: "p95 latency SLO", metric: "p95Latency", bound: "max", limit: 250 },
     { id: "availability-slo", kind: "metric", description: "Availability SLO", metric: "availability", bound: "min", limit: 0.99 },
   ],
   decisions: [
+    {
+      id: "investigate-traffic",
+      title: "Investigate the traffic",
+      description: "Break traffic down by endpoint to learn the read/write mix. Takes two minutes.",
+      immediateEffects: [],
+      complexityImpact: 0,
+      reveals: ["read-ratio"],
+      duration: 2,
+    },
+    {
+      id: "investigate-database",
+      title: "Investigate the database",
+      description: "Look at database load and query latency. Takes two minutes.",
+      immediateEffects: [],
+      complexityImpact: 0,
+      reveals: ["database-utilization", "database-latency"],
+      duration: 2,
+    },
     {
       id: "scale-application",
       title: "Scale the application",
@@ -53,7 +87,7 @@ export const trafficSpikeScenario = defineScenario({
       title: "Scale the application down",
       description: "Remove two application instances to save cost.",
       prerequisites: [
-        { condition: { type: "componentUtilization", componentId: "app", op: "<", value: 0.6 }, message: "The application is too busy to scale down safely." },
+        { condition: { type: "componentUtilization", componentId: "app", op: "<", value: 0.75 }, message: "The application is too busy to scale down safely." },
       ],
       immediateEffects: [{ type: "updateComponent", componentId: "app", instances: { add: -2, min: 2 } }],
       complexityImpact: 0,
@@ -89,17 +123,26 @@ export const trafficSpikeScenario = defineScenario({
     {
       id: "enable-rate-limiting",
       title: "Enable rate limiting",
-      description: "Reject traffic above 2,500 rps at the gateway to protect the backend.",
-      immediateEffects: [{ type: "configure", componentId: "gateway", key: "rateLimit", value: 2500 }],
+      description: "Reject traffic above 2,000 rps at the gateway to protect the backend.",
+      immediateEffects: [{ type: "configure", componentId: "gateway", key: "rateLimit", value: 2000 }],
       complexityImpact: 1,
       sideEffects: [
         {
           id: "throttled-customers",
           description: "Some legitimate users are rejected with HTTP 429 while traffic exceeds the limit.",
-          when: { type: "workload", property: "requestsPerSecond", op: ">", value: 2500 },
+          when: { type: "workload", property: "requestsPerSecond", op: ">", value: 2000 },
           effects: [{ type: "flag", flag: "customersThrottled", value: true }],
         },
       ],
+    },
+    {
+      id: "relax-rate-limiting",
+      title: "Relax the rate limit",
+      description: "Raise the gateway limit by 500 rps once the backend can take more.",
+      prerequisites: [{ condition: { type: "decisionTaken", decisionId: "enable-rate-limiting" }, message: "Rate limiting is not enabled." }],
+      immediateEffects: [{ type: "configure", componentId: "gateway", key: "rateLimit", change: { add: 500 } }],
+      complexityImpact: 0,
+      repeatable: true,
     },
     {
       id: "add-database-replica",
@@ -126,7 +169,7 @@ export const trafficSpikeScenario = defineScenario({
       title: "Process writes asynchronously",
       description: "Accept writes into a queue and apply them with background workers.",
       immediateEffects: [
-        { type: "addComponent", component: { id: "queue", type: "queue", label: "Write Queue" } },
+        { type: "addComponent", component: { id: "queue", type: "queue", label: "Write Queue", configuration: { maxDepth: 100000 } } },
         { type: "addComponent", component: { id: "workers", type: "worker", label: "Write Workers", instances: 2 } },
         { type: "redirect", target: "db", to: "queue", traffic: "write", fraction: 1 },
         { type: "connect", dependency: { from: "queue", to: "workers", traffic: "write" } },
@@ -140,9 +183,17 @@ export const trafficSpikeScenario = defineScenario({
     {
       id: "traffic-spike",
       title: "Launch goes viral",
-      description: "A celebrity shares the product. Traffic jumps tenfold.",
-      trigger: { at: 5 },
-      effects: [{ type: "workload", requestsPerSecond: { set: 3000 } }],
+      description: "A celebrity shares the product. Traffic is climbing fast towards ten times normal.",
+      trigger: { at: 3 },
+      effects: [{ type: "workload", requestsPerSecond: { set: 900 } }],
+      ongoingEffects: [
+        {
+          id: "ramp",
+          description: "Traffic keeps climbing until it reaches 3,000 rps.",
+          effects: [{ type: "workload", requestsPerSecond: { add: 700, max: 3000 } }],
+          until: { type: "workload", property: "requestsPerSecond", op: ">=", value: 3000 },
+        },
+      ],
     },
     {
       id: "cache-eviction",
@@ -156,9 +207,9 @@ export const trafficSpikeScenario = defineScenario({
     {
       id: "budget-cut",
       title: "Finance cuts the budget",
-      description: "The monthly infrastructure budget is reduced to $2,600.",
+      description: "The monthly infrastructure budget is reduced to $2,800.",
       trigger: { at: 25 },
-      effects: [{ type: "updateConstraint", constraintId: "budget", limit: { set: 2600 } }],
+      effects: [{ type: "updateConstraint", constraintId: "budget", limit: { set: 2800 } }],
     },
     {
       id: "traffic-settles",
@@ -169,6 +220,21 @@ export const trafficSpikeScenario = defineScenario({
     },
   ],
   objectives: [
+    {
+      id: "users-served",
+      description: "Error rate at or below 5% for at least 75% of the scenario",
+      condition: { type: "metric", metric: "errorRate", op: "<=", value: 0.05 },
+      evaluation: "fractionOfTime",
+      threshold: 0.75,
+      weight: 2,
+    },
+    {
+      id: "responsive",
+      description: "p95 latency at or below 250 ms for at least 60% of the scenario",
+      condition: { type: "metric", metric: "p95Latency", op: "<=", value: 250 },
+      evaluation: "fractionOfTime",
+      threshold: 0.6,
+    },
     { id: "latency", description: "p95 latency at or below 250 ms", condition: { type: "metric", metric: "p95Latency", op: "<=", value: 250 } },
     { id: "errors", description: "Error rate at or below 1%", condition: { type: "metric", metric: "errorRate", op: "<=", value: 0.01 } },
     {
