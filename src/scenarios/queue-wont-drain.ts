@@ -5,11 +5,11 @@ import { defineScenario } from "../engine/scenario/define.ts";
  *
  * An asynchronous job service (Producers → Jobs API → Job Queue → Workers →
  * PostgreSQL). The API only accepts a job and puts it on the queue, so it stays
- * fast and available while the real trouble builds up behind it: from T+5 the
- * job rate climbs past what the workers can process, the queue grows, and jobs
+ * fast and available while the real trouble builds up behind it: from T+3 the
+ * job rate climbs until it passes what the workers can process, the queue grows, and jobs
  * wait longer and longer before anyone works on them.
  *
- * At T+20 month-end reporting starts on the same PostgreSQL, which leaves less
+ * At T+16 month-end reporting starts on the same PostgreSQL, which leaves less
  * room for the workers' writes. Writes that fail are retried by the queue (up to
  * six deliveries), so a struggling database turns into extra work for the
  * workers and the database at once.
