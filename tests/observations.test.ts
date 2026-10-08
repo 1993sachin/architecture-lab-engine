@@ -53,6 +53,22 @@ describe("observations", () => {
     ]);
   });
 
+  it("formats numeric settings and carries the observation's description", () => {
+    const simulation = createSimulation(
+      buildScenario((definition) => {
+        definition.initialState.components[2] = { id: "db", type: "database", configuration: { share: 0.9, writeCost: 1.25 } };
+        definition.observations = [
+          { id: "share", label: "Cacheable", signal: { kind: "configuration", componentId: "db", key: "share" }, format: "ratio", description: "How much a cache could serve." },
+          { id: "cost", label: "Write cost", signal: { kind: "configuration", componentId: "db", key: "writeCost" }, format: "multiplier" },
+        ];
+      }),
+    );
+    expect(simulation.getObservations()).toEqual([
+      { id: "share", label: "Cacheable", value: 0.9, text: "Cacheable: 90%", description: "How much a cache could serve." },
+      { id: "cost", label: "Write cost", value: 1.25, text: "Write cost: 1.25×" },
+    ]);
+  });
+
   it("rejects decisions that reveal unknown observations", () => {
     expect(() =>
       buildScenario((definition) => {

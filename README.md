@@ -47,6 +47,16 @@ const result = simulation.getResult();       // outcome, metrics, impact, decisi
 const postmortem = simulation.getPostmortem(); // summary, impact, decisions, constraints, architecture, learning signals
 ```
 
+### Using it from another project
+
+The package is not published to npm. Install it from GitHub, pinned to a commit; npm builds `dist/` on install through the `prepare` script:
+
+```bash
+npm install github:1993sachin/architecture-lab-engine#<commit>
+```
+
+The built-in scenario also ships five reference playbooks (`trafficIncidentPlaybooks`); `playbookActions(playbook.steps, scenario)` turns one into replayable actions.
+
 ## Core concepts
 
 | Concept | What it is | Where |
@@ -56,7 +66,7 @@ const postmortem = simulation.getPostmortem(); // summary, impact, decisions, co
 | **Component** | A generic building block (`client`, `apiGateway`, `loadBalancer`, `application`, `cache`, `database`, `databaseReplica`, `queue`, `objectStorage`, `cdn`, `worker`) with capacity, instances, health, cost, configuration and calculated utilization. | `src/engine/components/` |
 | **Dependency graph** | Directed edges saying who calls whom, for which traffic (`all`, `read`, `write`) and what share. Must be acyclic. | `src/engine/components/graph.ts` |
 | **Decision** | An action the engineer takes: prerequisites, immediate effects, ongoing effects, cost impact, complexity impact, side effects, resources required, and optionally the time it takes (`duration`) and what it reveals (`reveals`). | `src/engine/decisions/` |
-| **Observation** | What the engineer can see: a metric, the workload mix, or one component's utilization, health, latency or errors. Some start hidden; investigation decisions reveal them without changing the system. | `src/engine/observations/` |
+| **Observation** | What the engineer can see: a metric, the workload mix, one component's utilization, health, latency or errors, a component setting or a flag. Some start hidden; investigation decisions reveal them without changing the system. An optional `description` explains it to a first-time reader, and `format` shows settings as a percentage or multiplier. | `src/engine/observations/` |
 | **Effect** | A declarative state change (add a component, scale it, redirect traffic, change a constraint, …). Decisions and events are built from effects. | `src/engine/effects/` |
 | **Event** | Something that happens to the engineer: a traffic spike, a failing database, a budget cut. Fires at a logical time or when a condition first holds. | `src/engine/events/` |
 | **Constraint** | A limit: budget, complexity (what the team can operate), a metric bound, a requirement such as data residency, or a deadline. Can change mid-scenario. | `src/engine/constraints/` |
