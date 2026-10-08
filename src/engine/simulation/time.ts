@@ -14,7 +14,8 @@ export function advanceTime(state: SystemState, minutes: number): void {
   state.time += minutes;
   for (const component of state.components) {
     if (component.type !== "queue") continue;
-    const net = (component.load.served - component.load.outbound) * 60 * minutes;
+    // Failed deliveries that will be retried go back on the queue.
+    const net = (component.load.served + component.load.retried - component.load.outbound) * 60 * minutes;
     const maxDepth = component.configuration["maxDepth"];
     const limit = typeof maxDepth === "number" && maxDepth > 0 ? maxDepth : Number.POSITIVE_INFINITY;
     component.backlog = round(Math.min(limit, Math.max(0, component.backlog + net)), 2);

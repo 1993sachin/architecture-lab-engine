@@ -104,7 +104,8 @@ export const COMPONENT_CATALOG: Readonly<Record<ComponentType, ComponentTypeDefi
     type: "queue",
     label: "Queue",
     // `maxDepth` (messages, 0 = unbounded): once full, the queue rejects what consumers cannot take.
-    defaults: { capacity: 10000, baseLatencyMs: 3, hourlyCost: 0.15, configuration: { maxDepth: 0 } },
+    // `maxAttempts` (1 = no retries): how many times a message is delivered before it is given up on.
+    defaults: { capacity: 10000, baseLatencyMs: 3, hourlyCost: 0.15, configuration: { maxDepth: 0, maxAttempts: 1 } },
     behavior: { ...forwardAll, asynchronous: true },
   },
   objectStorage: {

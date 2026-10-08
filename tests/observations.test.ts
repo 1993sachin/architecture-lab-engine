@@ -78,6 +78,18 @@ describe("observations", () => {
   });
 });
 
+describe("component capacity", () => {
+  it("observes what all instances of a component can handle together", () => {
+    const simulation = createSimulation(
+      buildScenario((definition) => {
+        definition.initialState.components[1] = { id: "app", type: "application", capacity: 200, instances: 3 };
+        definition.observations = [{ id: "app-capacity", label: "Application capacity", signal: { kind: "component", componentId: "app", property: "capacity" } }];
+      }),
+    );
+    expect(simulation.getObservations()).toEqual([{ id: "app-capacity", label: "Application capacity", value: 600, text: "Application capacity: 600 rps" }]);
+  });
+});
+
 describe("decision duration", () => {
   const scenario = buildScenario((definition) => {
     definition.decisions = [{ id: "migrate", title: "Migrate", description: "", immediateEffects: [], complexityImpact: 1, duration: 5 }];

@@ -27,7 +27,8 @@
     "test:watch": "vitest",
     "example": "node examples/10x-traffic-incident.ts",
     "report:strategies": "node tests/support/strategy-report.ts",
-    "report:landscape": "node tests/support/landscape.ts"
+    "report:landscape": "node tests/support/landscape.ts",
+    "report:queue-landscape": "node tests/support/queue-landscape.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

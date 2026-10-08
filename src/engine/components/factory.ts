@@ -9,6 +9,7 @@ export const EMPTY_LOAD: Readonly<ComponentLoad> = {
   accepted: 0,
   served: 0,
   outbound: 0,
+  retried: 0,
   ownLatencyMs: 0,
   ownErrorRate: 0,
   latencyMs: 0,

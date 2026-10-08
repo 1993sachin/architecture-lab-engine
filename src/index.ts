@@ -27,10 +27,12 @@ export { fromHourly, formatUsd, toCost, totalCost, HOURS_PER_MONTH } from "./eng
 export { applyEffects } from "./engine/effects/apply.ts";
 export { calculateMetrics } from "./engine/metrics/calculate.ts";
 export { METRIC_DEFINITIONS, formatMetric } from "./engine/metrics/definitions.ts";
-export { overloadErrorRate, queueingFactor } from "./engine/metrics/flow.ts";
+export { deliveryAttempts, exhaustedRate, overloadErrorRate, queueingFactor } from "./engine/metrics/flow.ts";
 export { diffStates } from "./engine/history/consequences.ts";
 export { observe } from "./engine/observations/observe.ts";
 export { architectureSnapshot, createPostmortem } from "./engine/scoring/postmortem.ts";
 
 export { trafficIncidentScenario } from "./scenarios/10x-traffic-incident.ts";
 export { trafficIncidentPlaybooks } from "./scenarios/10x-traffic-incident-playbooks.ts";
+export { queueWontDrainScenario } from "./scenarios/queue-wont-drain.ts";
+export { queueWontDrainPlaybooks } from "./scenarios/queue-wont-drain-playbooks.ts";

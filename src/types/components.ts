@@ -42,6 +42,11 @@ export interface ComponentLoad {
   served: number;
   /** Requests per second forwarded to dependencies. */
   outbound: number;
+  /**
+   * Queues only: messages per second that consumers failed and that go back on
+   * the queue for another attempt (see the queue's `maxAttempts` setting).
+   */
+  retried: number;
   /** Latency added by this component alone, in milliseconds. */
   ownLatencyMs: number;
   /** Fraction of inbound requests this component fails on its own (including throttling). */

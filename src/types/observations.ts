@@ -4,7 +4,7 @@ import type { MetricId } from "./metrics.ts";
 export type Signal =
   | { kind: "metric"; metric: MetricId }
   | { kind: "workload"; property: "requestsPerSecond" | "readRatio" }
-  | { kind: "component"; componentId: string; property: "utilization" | "health" | "latencyMs" | "errorRate" | "instances" }
+  | { kind: "component"; componentId: string; property: "utilization" | "health" | "latencyMs" | "errorRate" | "instances" | "capacity" }
   /** A component setting, e.g. a database's `writeCost`. */
   | { kind: "configuration"; componentId: string; key: string }
   /** A scenario fact held in `SystemState.flags`. */

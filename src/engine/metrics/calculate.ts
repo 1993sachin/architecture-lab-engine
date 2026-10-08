@@ -4,7 +4,7 @@ import { effectiveCapacity } from "../components/factory.ts";
 import { totalCost } from "../costs/cost.ts";
 import { cloneState } from "../state/clone.ts";
 import { clamp, round } from "../state/numeric.ts";
-import { calculateFlows, entryComponents } from "./flow.ts";
+import { calculateFlows, consumerFailureRate, entryComponents, exhaustedRate } from "./flow.ts";
 
 /** Tail latency multipliers grow with the busiest component on the request path. */
 function tailFactors(maxUtilization: number): { p95: number; p99: number } {
@@ -66,6 +66,19 @@ export function calculateMetricsInPlace(state: SystemState, tracked: readonly Me
     metrics.memoryUtilization = round(instances > 0 ? memory / instances : 0);
   }
 
+  const workers = state.components.filter((component) => component.type === "worker");
+  if (workers.length > 0) {
+    let accepted = 0;
+    let capacity = 0;
+    for (const worker of workers) {
+      const workerCapacity = effectiveCapacity(worker);
+      if (workerCapacity === null) continue;
+      accepted += worker.load.accepted;
+      capacity += workerCapacity;
+    }
+    metrics.workerUtilization = round(capacity > 0 ? accepted / capacity : 0);
+  }
+
   const databases = state.components.filter((component) => component.type === "database" || component.type === "databaseReplica");
   if (databases.length > 0) {
     metrics.databaseUtilization = round(Math.max(...databases.map((database) => database.utilization)));
@@ -84,6 +97,23 @@ export function calculateMetricsInPlace(state: SystemState, tracked: readonly Me
   const queues = state.components.filter((component) => component.type === "queue");
   if (queues.length > 0) {
     metrics.queueDepth = round(queues.reduce((sum, queue) => sum + queue.backlog, 0), 2);
+    // Deliveries to consumers, including retries.
+    const delivered = queues.reduce((sum, queue) => sum + queue.load.outbound, 0);
+    metrics.processingRate = round(delivered, 2);
+    // How long a message arriving now waits: the backlog ahead of it at the current drain rate.
+    metrics.processingDelay = round(Math.max(0, ...queues.map((queue) => (queue.backlog > 0 ? queue.backlog / Math.max(queue.load.outbound, 1) : 0))), 2);
+    metrics.retryRate = round(delivered > 0 ? queues.reduce((sum, queue) => sum + queue.load.retried, 0) / delivered : 0);
+    // Messages given up on after their last attempt, as a share of messages finished (succeeded or given up).
+    let finished = 0;
+    let exhausted = 0;
+    for (const queue of queues) {
+      const maxAttempts = queue.configuration["maxAttempts"];
+      const given = exhaustedRate(consumerFailureRate(state, queue), typeof maxAttempts === "number" ? maxAttempts : 1);
+      const messages = queue.load.outbound - queue.load.retried;
+      finished += messages;
+      exhausted += messages * given;
+    }
+    metrics.jobFailureRate = round(finished > 0 ? exhausted / finished : 0);
   }
 
   metrics.monthlyCost = totalCost(state).monthly;
