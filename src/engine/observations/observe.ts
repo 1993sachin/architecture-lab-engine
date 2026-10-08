@@ -6,7 +6,13 @@ import { round } from "../state/numeric.ts";
 /** Reads an observation from a state. Never changes the state. */
 export function observe(observation: Observation, state: SystemState): ObservedValue {
   const { signal } = observation;
-  const base = { id: observation.id, label: observation.label };
+  const base = { id: observation.id, label: observation.label, ...(observation.description ? { description: observation.description } : {}) };
+  const formatted = (value: number | string | boolean) =>
+    typeof value !== "number" || observation.format === undefined
+      ? String(value)
+      : observation.format === "ratio"
+        ? `${round(value * 100, 1)}%`
+        : `${round(value, 2)}×`;
   switch (signal.kind) {
     case "metric": {
       const value = state.metrics[signal.metric];
@@ -26,13 +32,13 @@ export function observe(observation: Observation, state: SystemState): ObservedV
       const value = findComponent(state, signal.componentId)?.configuration[signal.key];
       return value === undefined
         ? { ...base, value: null, text: `${observation.label}: not available` }
-        : { ...base, value, text: `${observation.label}: ${String(value)}` };
+        : { ...base, value, text: `${observation.label}: ${formatted(value)}` };
     }
     case "flag": {
       const value = state.flags[signal.flag];
       return value === undefined
         ? { ...base, value: null, text: `${observation.label}: not available` }
-        : { ...base, value, text: `${observation.label}: ${String(value)}` };
+        : { ...base, value, text: `${observation.label}: ${formatted(value)}` };
     }
     case "component": {
       const component = findComponent(state, signal.componentId);

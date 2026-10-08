@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   createScenario,
   createSimulation,
+  playbookActions,
   replay,
+  trafficIncidentPlaybooks,
   trafficIncidentScenario,
   type Simulation,
   type SimulationAction,
@@ -378,6 +380,11 @@ describe("multiple viable strategies", () => {
 });
 
 describe("replay and counterfactuals", () => {
+  it("ships its playbooks with the engine", () => {
+    expect(trafficIncidentPlaybooks.map((playbook) => playbook.id)).toEqual(["A", "B", "C", "D", "E"]);
+    expect(replay(scenario, playbookActions(trafficIncidentPlaybooks[2]!.steps, scenario)).getHistory().decisions).toHaveLength(12);
+  });
+
   it("replays a playbook to exactly the same history and result", () => {
     const original = play(strategy("E"));
     const replayed = replay(scenario, original.getHistory().actions);

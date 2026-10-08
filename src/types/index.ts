@@ -7,6 +7,7 @@ export * from "./events.ts";
 export * from "./history.ts";
 export * from "./metrics.ts";
 export * from "./observations.ts";
+export * from "./playbooks.ts";
 export * from "./postmortem.ts";
 export * from "./results.ts";
 export * from "./scenario.ts";

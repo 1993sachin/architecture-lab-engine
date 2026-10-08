@@ -5,6 +5,7 @@
 export * from "./types/index.ts";
 
 export { createScenario, defineScenario } from "./engine/scenario/define.ts";
+export { playbookActions } from "./engine/scenario/playbooks.ts";
 export {
   createSimulation,
   replay,
@@ -32,3 +33,4 @@ export { observe } from "./engine/observations/observe.ts";
 export { architectureSnapshot, createPostmortem } from "./engine/scoring/postmortem.ts";
 
 export { trafficIncidentScenario } from "./scenarios/10x-traffic-incident.ts";
+export { trafficIncidentPlaybooks } from "./scenarios/10x-traffic-incident-playbooks.ts";

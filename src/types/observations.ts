@@ -21,6 +21,10 @@ export interface Observation {
   signal: Signal;
   /** Whether the engineer can see it from the start. Defaults to true. */
   visible?: boolean;
+  /** What the observation means, for a reader seeing it for the first time. */
+  description?: string;
+  /** How to show a numeric configuration or flag value: `ratio` as a percentage, `multiplier` as `1.25×`. */
+  format?: "ratio" | "multiplier";
 }
 
 /** The value of an observation at one moment. */
@@ -31,4 +35,6 @@ export interface ObservedValue {
   value: number | string | boolean | null;
   /** Readable form, e.g. `Reads are 80% of traffic` or `Primary Database utilization: 146%`. */
   text: string;
+  /** The observation's description, when the scenario gives one. */
+  description?: string;
 }
