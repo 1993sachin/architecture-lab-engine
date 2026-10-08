@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateMetrics, createSimulation, overloadErrorRate, queueingFactor, type SystemState } from "../src/index.ts";
+import { calculateMetrics, createSimulation, deliveryAttempts, exhaustedRate, overloadErrorRate, queueingFactor, type SystemState } from "../src/index.ts";
 import { buildScenario, component } from "./helpers.ts";
 
 /** client → app (100 rps capacity, 20 ms) only. */
@@ -211,6 +211,72 @@ describe("bounded queues", () => {
     simulation.advance(1);
     // Full (capped at 4,500): only what the worker drains is accepted.
     expect(simulation.getState().metrics).toMatchObject({ queueDepth: 4500, errorRate: 0.5 });
+  });
+});
+
+describe("processing metrics and retries", () => {
+  /** client → app → queue → worker (capacity 50) → db, all writes. */
+  function pipeline(options: { rps: number; workerErrors?: number; maxAttempts?: number; dbCapacity?: number }) {
+    return buildScenario((definition) => {
+      definition.workload = { requestsPerSecond: options.rps, readRatio: 0 };
+      definition.initialState.components = [
+        { id: "client", type: "client" },
+        { id: "app", type: "application", capacity: 1000 },
+        { id: "queue", type: "queue", configuration: { maxAttempts: options.maxAttempts ?? 1 } },
+        { id: "worker", type: "worker", capacity: 50, configuration: { baseErrorRate: options.workerErrors ?? 0 } },
+        { id: "db", type: "database", capacity: options.dbCapacity ?? 1000 },
+      ];
+      definition.initialState.dependencies = [
+        { from: "client", to: "app" },
+        { from: "app", to: "queue" },
+        { from: "queue", to: "worker" },
+        { from: "worker", to: "db" },
+      ];
+    });
+  }
+
+  it("averages deliveries per message from the failure rate and the attempt limit", () => {
+    expect(deliveryAttempts(0, 6)).toBe(1);
+    expect(deliveryAttempts(0.5, 1)).toBe(1);
+    expect(deliveryAttempts(0.5, 2)).toBe(1.5);
+    expect(deliveryAttempts(1, 4)).toBe(4);
+    expect(exhaustedRate(0.5, 2)).toBe(0.25);
+    expect(exhaustedRate(0.1, 1)).toBe(0.1);
+  });
+
+  it("reports processing rate, worker utilization and processing delay", () => {
+    const simulation = createSimulation(pipeline({ rps: 100 }));
+    const initial = simulation.getState().metrics;
+    expect(initial).toMatchObject({ processingRate: 50, workerUtilization: 1, processingDelay: 0, retryRate: 0, jobFailureRate: 0 });
+    simulation.advance(1);
+    // 3,000 messages waiting, drained at 50 a second: a new message waits a minute.
+    expect(simulation.getState().metrics).toMatchObject({ queueDepth: 3000, processingDelay: 60 });
+  });
+
+  it("does not retry by default: failed messages are given up on", () => {
+    const { metrics } = pipeline({ rps: 40, workerErrors: 0.2 }).initialState;
+    expect(metrics.retryRate).toBe(0);
+    expect(metrics.jobFailureRate).toBe(0.2);
+  });
+
+  it("puts failed deliveries back on the queue when retries are allowed", () => {
+    const scenario = pipeline({ rps: 40, workerErrors: 0.5, maxAttempts: 2 });
+    const { metrics } = scenario.initialState;
+    // Half of the 40 deliveries fail; a third of all deliveries are retries in steady state (1.5 per message).
+    expect(metrics.retryRate).toBeCloseTo(1 / 3, 3);
+    expect(metrics.jobFailureRate).toBe(0.25);
+    const simulation = createSimulation(scenario);
+    simulation.advance(1);
+    // The retries are extra work: 40 new + ~13 retried a second against 50 of capacity.
+    expect(simulation.getState().metrics.queueDepth).toBeGreaterThan(0);
+  });
+
+  it("counts failures of what the consumers call: an overloaded database causes retries", () => {
+    const healthy = pipeline({ rps: 40, maxAttempts: 3, dbCapacity: 1000 }).initialState.metrics;
+    const overloaded = pipeline({ rps: 40, maxAttempts: 3, dbCapacity: 25 }).initialState.metrics;
+    expect(healthy.retryRate).toBe(0);
+    expect(overloaded.databaseUtilization).toBeGreaterThan(1);
+    expect(overloaded.retryRate).toBeGreaterThan(0.2);
   });
 });
 

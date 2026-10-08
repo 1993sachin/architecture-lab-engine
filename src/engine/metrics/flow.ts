@@ -19,6 +19,11 @@ import { round } from "../state/numeric.ts";
  * a component are its own plus those of the synchronous dependencies it calls,
  * weighted by how often it calls them. This is how a slow or failing database
  * propagates up to the application and the clients.
+ *
+ * Retries: a queue redelivers messages its consumers failed, up to its
+ * `maxAttempts`. Consumers fail a message when they or their synchronous
+ * dependencies fail the request, so an overloaded database behind the workers
+ * produces retries, and retries are more work for the workers and the database.
  */
 
 const DEFAULT_TIMEOUT_MS = 1000;
@@ -107,7 +112,8 @@ export function calculateFlows(state: SystemState): Set<string> {
     let overflowRate = 0;
     const maxDepth = numberConfig(component, "maxDepth", 0);
     if (behavior.asynchronous && maxDepth > 0 && component.backlog >= maxDepth && accepted > 0) {
-      overflowRate = Math.max(0, 1 - drainCapacity(state, component) / accepted);
+      // Retried messages (as of the last calculation) take their place in the queue first.
+      overflowRate = Math.max(0, 1 - Math.max(0, drainCapacity(state, component) - component.load.retried) / accepted);
     }
     const baselineErrorRate = numberConfig(component, "baseErrorRate", 0);
     const processErrorRate = 1 - (1 - profile.errorRate) * (1 - baselineErrorRate) * (1 - loadErrorRate) * (1 - overflowRate);
@@ -148,6 +154,7 @@ export function calculateFlows(state: SystemState): Set<string> {
       accepted: round(accepted),
       served: round(served),
       outbound: round(forwardRead + forwardWrite),
+      retried: 0,
       ownLatencyMs: round(ownLatencyMs),
       ownErrorRate: round(inbound > 0 ? (throttled + accepted * processErrorRate) / inbound : processErrorRate),
       latencyMs: 0,
@@ -180,7 +187,44 @@ export function calculateFlows(state: SystemState): Set<string> {
     component.load.errorRate = round(errorRate);
   }
 
+  // Retries: with consumer errors known, each queue sends back the failed deliveries it will try again.
+  for (const component of order) {
+    if (!COMPONENT_CATALOG[component.type].behavior.asynchronous) continue;
+    const attempts = deliveryAttempts(consumerFailureRate(state, component), numberConfig(component, "maxAttempts", 1));
+    component.load.retried = round(component.load.outbound * (1 - 1 / attempts));
+  }
+
   return synchronous;
+}
+
+/**
+ * Average number of deliveries per message when each delivery fails with
+ * probability `failure` and a message is tried at most `maxAttempts` times.
+ */
+export function deliveryAttempts(failure: number, maxAttempts: number): number {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  const p = Math.min(Math.max(failure, 0), 1);
+  if (p >= 1) return attempts;
+  return (1 - p ** attempts) / (1 - p);
+}
+
+/** Share of messages that fail every delivery and are given up on. */
+export function exhaustedRate(failure: number, maxAttempts: number): number {
+  return Math.min(Math.max(failure, 0), 1) ** Math.max(1, Math.floor(maxAttempts));
+}
+
+/** Share of a queue's deliveries its consumers fail, including failures of what they call. */
+export function consumerFailureRate(state: SystemState, queue: Component): number {
+  let shares = 0;
+  let failures = 0;
+  for (const dependency of state.dependencies) {
+    if (dependency.from !== queue.id) continue;
+    const consumer = state.components.find((component) => component.id === dependency.to);
+    if (!consumer) continue;
+    shares += dependency.share;
+    failures += dependency.share * consumer.load.errorRate;
+  }
+  return shares > 0 ? failures / shares : 0;
 }
 
 /** Total capacity of a queue's consumers; unbounded consumers drain everything. */

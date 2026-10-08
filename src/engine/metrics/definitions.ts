@@ -16,6 +16,11 @@ export const METRIC_DEFINITIONS: Readonly<Record<MetricId, MetricDefinition>> = 
   databaseUtilization: { id: "databaseUtilization", label: "Database utilization", unit: "ratio", betterWhen: "lower", significantChange: 0.01 },
   cacheHitRate: { id: "cacheHitRate", label: "Cache hit rate", unit: "ratio", betterWhen: "higher", significantChange: 0.01 },
   queueDepth: { id: "queueDepth", label: "Queue depth", unit: "messages", betterWhen: "lower", significantChange: 1 },
+  processingRate: { id: "processingRate", label: "Processing rate", unit: "rps", betterWhen: "neutral", significantChange: 1 },
+  processingDelay: { id: "processingDelay", label: "Processing delay", unit: "s", betterWhen: "lower", significantChange: 1 },
+  workerUtilization: { id: "workerUtilization", label: "Worker utilization", unit: "ratio", betterWhen: "lower", significantChange: 0.01 },
+  retryRate: { id: "retryRate", label: "Retried deliveries", unit: "ratio", betterWhen: "lower", significantChange: 0.005 },
+  jobFailureRate: { id: "jobFailureRate", label: "Failed jobs", unit: "ratio", betterWhen: "lower", significantChange: 0.001 },
   monthlyCost: { id: "monthlyCost", label: "Monthly cost", unit: "usd/month", betterWhen: "lower", significantChange: 1 },
 };
 
@@ -24,6 +29,8 @@ export function formatMetric(metric: MetricId, value: number): string {
   switch (METRIC_DEFINITIONS[metric].unit) {
     case "ms":
       return `${round(value, 1)} ms`;
+    case "s":
+      return `${round(value, 1)} s`;
     case "ratio":
       return `${round(value * 100, 2)}%`;
     case "rps":

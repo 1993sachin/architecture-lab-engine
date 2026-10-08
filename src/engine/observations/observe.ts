@@ -1,5 +1,6 @@
 import type { MetricId, Observation, ObservedValue, SystemState } from "../../types/index.ts";
 import { METRIC_DEFINITIONS, formatMetric } from "../metrics/definitions.ts";
+import { effectiveCapacity } from "../components/factory.ts";
 import { findComponent } from "../state/lookup.ts";
 import { round } from "../state/numeric.ts";
 
@@ -54,6 +55,13 @@ export function observe(observation: Observation, state: SystemState): ObservedV
           return { ...base, value: component.load.errorRate, text: `${observation.label}: ${round(component.load.errorRate * 100, 2)}%` };
         case "instances":
           return { ...base, value: component.instances, text: `${observation.label}: ${component.instances}` };
+        case "capacity": {
+          // What all instances can handle together right now; `null` when unbounded.
+          const capacity = effectiveCapacity(component);
+          return capacity === null
+            ? { ...base, value: null, text: `${observation.label}: unbounded` }
+            : { ...base, value: round(capacity, 2), text: `${observation.label}: ${round(capacity, 1)} rps` };
+        }
       }
     }
   }

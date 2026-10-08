@@ -78,9 +78,11 @@ The built-in scenario also ships five reference playbooks (`trafficIncidentPlayb
 
 ### Metrics
 
-`requestsPerSecond`, `latency`, `p95Latency`, `p99Latency`, `errorRate`, `availability`, `throttleRate`, `serverErrorRate`, `cpuUtilization`, `memoryUtilization`, `databaseUtilization`, `cacheHitRate`, `queueDepth`, `monthlyCost`.
+`requestsPerSecond`, `latency`, `p95Latency`, `p99Latency`, `errorRate`, `availability`, `throttleRate`, `serverErrorRate`, `cpuUtilization`, `memoryUtilization`, `databaseUtilization`, `cacheHitRate`, `queueDepth`, `processingRate`, `processingDelay`, `workerUtilization`, `retryRate`, `jobFailureRate`, `monthlyCost`.
 
 `errorRate` counts rate-limited requests as failures, because users see them; `throttleRate` and `serverErrorRate` split it.
+
+For queues: `processingRate` is what consumers take per second (retries included), `processingDelay` is how many seconds a message arriving now waits (the backlog ahead of it at that rate), `retryRate` is the share of deliveries that are retries, and `jobFailureRate` the share of messages given up on after their last attempt.
 
 Metrics that do not apply are absent (no cache, no `cacheHitRate`), and a scenario can track a subset with `metrics: [...]`. Utilization metrics are demand divided by capacity, so values above 1 mean overload.
 
@@ -137,6 +139,8 @@ Metrics come from one small, readable model in `src/engine/metrics/flow.ts`:
 2. **Backward pass** (callees before callers): a request's latency and error rate at a component are its own plus those of the synchronous dependencies it calls, weighted by how often it calls them.
 
 So when the database's capacity is exceeded or it becomes unhealthy, the application's latency and errors rise, and the clients see it. Latency grows with utilization through a queueing factor, and tail latency (p95/p99) with the busiest component on the request path. Queues break the chain: callers do not wait on, or fail with, the workers behind them.
+
+Queues retry: a queue's `maxAttempts` (default 1) is how many times a message is delivered before it is given up on. A delivery fails when the consumer or anything it calls synchronously fails it, so an overloaded database behind the workers turns into retries, which are more work for the workers and the database. In steady state a message is delivered `(1 − pⁿ) / (1 − p)` times for a failure rate `p` and `n` attempts; the queue sends that extra share back onto its backlog.
 
 Some requests cost more than others: a component's `readCost` and `writeCost` configuration weigh its demand per request class, and `baseErrorRate` sets a load-independent error floor.
 
@@ -258,10 +262,15 @@ examples/           runnable examples
 | `npm run example` | Play a playbook against the 10× Traffic Incident (`npm run example -- B` for another) |
 | `npm run report:strategies` | Compare the five playbooks |
 | `npm run report:landscape` | Search 14,336 plans (about three minutes) and print outcomes and the Pareto frontier |
+| `npm run report:queue-landscape` | Search 384 plans for The Queue That Won't Drain and print outcomes, the Pareto frontier and which mitigations successes use |
 
 ## The 10× Traffic Incident
 
 The built-in scenario: a product launch goes viral, traffic climbs from 10,000 to 100,000 rps, PostgreSQL is the hidden bottleneck, and finance cuts the budget halfway through. [`docs/10x-traffic-incident.md`](docs/10x-traffic-incident.md) describes the learning experience, the hidden information, the decisions and trade-offs, and the results: five playbooks (four succeed, for different reasons) and a search of 14,336 plans with 192 successes, 3,152 partial outcomes and no dominant plan. `tests/traffic-incident.test.ts` covers each mechanic.
+
+## The Queue That Won't Drain
+
+The second scenario, with different failure mechanics: an asynchronous job service whose API stays fast and available while work piles up in a queue behind it. Worker capacity, database load and retries are hidden; adding workers in front of a database that is already failing writes turns into a retry storm. [`docs/queue-wont-drain.md`](docs/queue-wont-drain.md) describes the scenario, the playbooks (four succeed with different trade-offs, one shows the trap) and the plan search. It uses no scenario-specific engine code; it needed only generic queue metrics, queue retries and a component `capacity` observation. `tests/queue-incident.test.ts` covers each mechanic.
 
 ## Stress test
 
